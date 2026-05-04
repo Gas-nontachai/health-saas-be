@@ -25,9 +25,25 @@ export type LoginInput = {
   password: string;
 };
 
+export type ResetPasswordInput = {
+  keycloakId: string;
+  email: string;
+  currentPassword: string;
+  newPassword: string;
+};
+
+export type KeycloakUser = {
+  id: string;
+  email?: string;
+  username?: string;
+};
+
 export type KeycloakAuthService = {
   register(input: RegisterInput): Promise<KeycloakTokenResponse>;
   login(input: LoginInput): Promise<KeycloakTokenResponse>;
+  resetPassword(input: ResetPasswordInput): Promise<void>;
+  findUserByEmail(email: string): Promise<KeycloakUser | null>;
+  setPassword(keycloakId: string, newPassword: string): Promise<void>;
 };
 
 export function createKeycloakAuthService(config: AppConfig): KeycloakAuthService {
@@ -39,6 +55,19 @@ export function createKeycloakAuthService(config: AppConfig): KeycloakAuthServic
     },
     async login(input) {
       return getUserToken(config, input);
+    },
+    async resetPassword(input) {
+      await getUserToken(config, { email: input.email, password: input.currentPassword });
+      const adminToken = await getAdminToken(config);
+      await resetKeycloakPassword(config, adminToken, input.keycloakId, input.newPassword);
+    },
+    async findUserByEmail(email) {
+      const adminToken = await getAdminToken(config);
+      return findKeycloakUserByEmail(config, adminToken, email);
+    },
+    async setPassword(keycloakId, newPassword) {
+      const adminToken = await getAdminToken(config);
+      await resetKeycloakPassword(config, adminToken, keycloakId, newPassword);
     }
   };
 }
@@ -92,6 +121,45 @@ async function createKeycloakUser(config: AppConfig, adminToken: string, input: 
   if (response.status === 409) {
     throw new HttpError(409, "User already exists");
   }
+
+  if (!response.ok) {
+    const message = await readKeycloakError(response);
+    throw new HttpError(response.status, message);
+  }
+}
+
+async function findKeycloakUserByEmail(config: AppConfig, adminToken: string, email: string): Promise<KeycloakUser | null> {
+  const url = new URL(`${config.KEYCLOAK_BASE_URL}/admin/realms/${encodeURIComponent(config.KEYCLOAK_REALM)}/users`);
+  url.searchParams.set("email", email);
+  url.searchParams.set("exact", "true");
+  url.searchParams.set("max", "2");
+
+  const response = await fetch(url, {
+    headers: {
+      authorization: `Bearer ${adminToken}`
+    }
+  });
+
+  const users = await parseKeycloakResponse<KeycloakUser[]>(response);
+  return users.find((user) => user.email?.toLowerCase() === email.toLowerCase() || user.username?.toLowerCase() === email.toLowerCase()) ?? null;
+}
+
+async function resetKeycloakPassword(config: AppConfig, adminToken: string, keycloakId: string, newPassword: string): Promise<void> {
+  const response = await fetch(
+    `${config.KEYCLOAK_BASE_URL}/admin/realms/${encodeURIComponent(config.KEYCLOAK_REALM)}/users/${encodeURIComponent(keycloakId)}/reset-password`,
+    {
+      method: "PUT",
+      headers: {
+        authorization: `Bearer ${adminToken}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        type: "password",
+        value: newPassword,
+        temporary: false
+      })
+    }
+  );
 
   if (!response.ok) {
     const message = await readKeycloakError(response);
