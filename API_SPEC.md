@@ -557,37 +557,157 @@ Authorization: Bearer <access_token>
 
 #### `GET /dashboard`
 
-ดึงข้อมูลสรุป blood sugar (avg, min, max) พร้อม trend data
+ดึง dashboard widgets — FE เลือกได้ว่าจะแสดง widget ไหนบ้าง ถ้าข้อมูลไม่เพียงพอ widget จะบอก status `"insufficient_data"` พร้อม message
 
 **Headers:** `Authorization: Bearer <token>`
 
 **Query Parameters:**
 
-| Param | Type | Required | Default | Options |
+| Param | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `range` | `string` | ❌ | `30d` | `7d`, `30d`, `all` |
+| `widgets` | `string` | ❌ | default set | comma-separated widget keys เช่น `summary,trend,bmi` |
+
+**Available Widgets:**
+
+| Key | Description | ต้องการข้อมูลขั้นต่ำ |
+|---|---|---|
+| `summary` | สรุป avg / min / max / count | ≥ 1 record |
+| `trend` | ข้อมูล line chart (datetime + value) | ≥ 1 record |
+| `timeInRange` | % Time in Range (Low < 70, Normal 70–180, High > 180) | ≥ 1 record |
+| `distribution` | Histogram buckets (\<70, 70–100, 101–140, 141–180, 181–250, >250) | ≥ 1 record |
+| `dailyPattern` | ค่าเฉลี่ยตามช่วงเวลา (morning/afternoon/evening/night) | ≥ 3 records |
+| `weeklyAverage` | สรุปรายสัปดาห์ (avg, min, max) | ≥ 2 records |
+| `medAdherence` | % วันที่กินยาครบ (morning/evening/both) | ≥ 1 record + มี med data |
+| `medComparison` | เปรียบเทียบค่าน้ำตาล วันกินยา vs ไม่กินยา | ≥ 3 records + ต้องมีทั้งสอง |
+| `loggingStreak` | จำนวนวันบันทึกติดต่อกัน + longest streak | ≥ 1 record |
+| `recentAlerts` | 10 records ล่าสุดที่ Low / High | ≥ 1 record |
+| `bmi` | คำนวณ BMI จาก profile | ต้องมี weight + height |
+| `periodComparison` | เทียบค่าเฉลี่ยช่วงปัจจุบัน vs ช่วงก่อนหน้า | range ≠ `all` + ต้องมี records ทั้ง 2 ช่วง |
+
+**Default Widgets:** `summary`, `trend`, `timeInRange`, `distribution`, `dailyPattern`, `medAdherence`, `recentAlerts`
 
 **Response** `200 OK`
 
 ```json
 {
-  "avg": 125.5,
-  "min": 90,
-  "max": 200,
-  "trend": [
-    {
-      "datetime": "2026-04-05T03:00:00.000Z",
-      "value": 110
+  "range": "30d",
+  "availableWidgets": [
+    "summary", "trend", "timeInRange", "distribution", "dailyPattern",
+    "weeklyAverage", "medAdherence", "medComparison", "loggingStreak",
+    "recentAlerts", "bmi", "periodComparison"
+  ],
+  "defaultWidgets": [
+    "summary", "trend", "timeInRange", "distribution",
+    "dailyPattern", "medAdherence", "recentAlerts"
+  ],
+  "widgets": {
+    "summary": {
+      "status": "ok",
+      "data": { "avg": 126, "min": 90, "max": 200, "count": 42 }
     },
-    {
-      "datetime": "2026-04-06T03:00:00.000Z",
-      "value": 130
+    "trend": {
+      "status": "ok",
+      "data": [
+        { "datetime": "2026-04-05T03:00:00.000Z", "value": 110 },
+        { "datetime": "2026-04-06T03:00:00.000Z", "value": 130 }
+      ]
+    },
+    "timeInRange": {
+      "status": "ok",
+      "data": {
+        "total": 42,
+        "low": { "count": 2, "percent": 4.8 },
+        "normal": { "count": 35, "percent": 83.3 },
+        "high": { "count": 5, "percent": 11.9 }
+      }
+    },
+    "distribution": {
+      "status": "ok",
+      "data": [
+        { "label": "<70", "count": 2 },
+        { "label": "70-100", "count": 10 },
+        { "label": "101-140", "count": 18 },
+        { "label": "141-180", "count": 7 },
+        { "label": "181-250", "count": 4 },
+        { "label": ">250", "count": 1 }
+      ]
+    },
+    "dailyPattern": {
+      "status": "ok",
+      "data": [
+        { "slot": "morning", "avg": 115, "count": 12 },
+        { "slot": "afternoon", "avg": 140, "count": 10 },
+        { "slot": "evening", "avg": 130, "count": 15 },
+        { "slot": "night", "avg": 105, "count": 5 }
+      ]
+    },
+    "medAdherence": {
+      "status": "ok",
+      "data": {
+        "totalDays": 30,
+        "morning": { "days": 25, "percent": 83.3 },
+        "evening": { "days": 20, "percent": 66.7 },
+        "both": { "days": 18, "percent": 60.0 }
+      }
+    },
+    "medComparison": {
+      "status": "ok",
+      "data": {
+        "withMed": { "avg": 118, "count": 30 },
+        "withoutMed": { "avg": 145, "count": 12 },
+        "difference": 27
+      }
+    },
+    "weeklyAverage": {
+      "status": "ok",
+      "data": [
+        { "week": "2026-W14", "avg": 120, "min": 90, "max": 160, "count": 10 },
+        { "week": "2026-W15", "avg": 130, "min": 95, "max": 200, "count": 12 }
+      ]
+    },
+    "loggingStreak": {
+      "status": "ok",
+      "data": { "currentStreak": 5, "longestStreak": 14, "totalDaysLogged": 28 }
+    },
+    "recentAlerts": {
+      "status": "ok",
+      "data": [
+        { "datetime": "2026-05-03T10:00:00.000Z", "bloodSugar": 210, "level": "high", "note": "หลังกินเค้ก" },
+        { "datetime": "2026-05-01T06:00:00.000Z", "bloodSugar": 58, "level": "low", "note": null }
+      ]
+    },
+    "bmi": {
+      "status": "ok",
+      "data": { "bmi": 23.0, "category": "Normal", "weight": 70.5, "height": 175.0 }
+    },
+    "periodComparison": {
+      "status": "ok",
+      "data": {
+        "current": { "avg": 126, "count": 22 },
+        "previous": { "avg": 135, "count": 20 },
+        "change": -9
+      }
     }
-  ]
+  }
 }
 ```
 
-> `avg`, `min`, `max` จะเป็น `null` หากไม่มี records ในช่วงที่เลือก
+**Widget status:**
+- `"ok"` — ข้อมูลเพียงพอ ใช้งานได้
+- `"insufficient_data"` — ข้อมูลไม่เพียงพอ มี `message` อธิบายเหตุผล, `data` อาจเป็น `null`
+
+**ตัวอย่าง widget ที่ข้อมูลไม่เพียงพอ:**
+
+```json
+{
+  "bmi": {
+    "status": "insufficient_data",
+    "message": "Weight and height are required in profile to calculate BMI",
+    "data": null
+  }
+}
+```
 
 ---
 
