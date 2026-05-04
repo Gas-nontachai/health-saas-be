@@ -16,12 +16,29 @@ const updateRecordSchema = createRecordSchema.partial().refine((value) => Object
   message: "At least one field is required"
 });
 
+const paginationSchema = z.object({
+  cursor: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20)
+});
+
 export async function registerRecordRoutes(app: FastifyInstance, prisma: AppPrisma): Promise<void> {
   app.get("/records", { preHandler: app.authenticate }, async (request) => {
-    return prisma.record.findMany({
+    const { cursor, limit } = paginationSchema.parse(request.query);
+
+    const records = await prisma.record.findMany({
       where: { userId: request.user.id },
-      orderBy: { datetime: "desc" }
+      orderBy: { datetime: "desc" },
+      take: limit + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {})
     });
+
+    const hasMore = records.length > limit;
+    if (hasMore) records.pop();
+
+    return {
+      data: records,
+      nextCursor: hasMore ? records[records.length - 1].id : null
+    };
   });
 
   app.post("/records", { preHandler: app.authenticate }, async (request, reply) => {

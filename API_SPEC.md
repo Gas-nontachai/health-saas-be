@@ -359,26 +359,42 @@ Authorization: Bearer <access_token>
 
 #### `GET /records`
 
-ดึง records ทั้งหมดของ user ปัจจุบัน เรียงจากล่าสุดก่อน
+ดึง records ของ user ปัจจุบัน เรียงจากล่าสุดก่อน (cursor-based pagination สำหรับ infinite scroll)
 
 **Headers:** `Authorization: Bearer <token>`
+
+**Query Parameters:**
+
+| Param | Type | Default | Description |
+|---|---|---|---|
+| `limit` | `integer` | `20` | จำนวน records ต่อหน้า (1–100) |
+| `cursor` | `string (uuid)` | — | `nextCursor` จาก response ก่อนหน้า เพื่อดึงหน้าถัดไป |
+
+**Example:**
+- หน้าแรก: `GET /records?limit=20`
+- หน้าถัดไป: `GET /records?limit=20&cursor=<nextCursor>`
 
 **Response** `200 OK`
 
 ```json
-[
-  {
-    "id": "uuid",
-    "userId": "uuid",
-    "datetime": "2026-05-04T10:00:00.000Z",
-    "bloodSugar": 120,
-    "medMorning": 1,
-    "medEvening": null,
-    "note": "หลังอาหาร",
-    "createdAt": "2026-05-04T10:00:00.000Z"
-  }
-]
+{
+  "data": [
+    {
+      "id": "uuid",
+      "userId": "uuid",
+      "datetime": "2026-05-04T10:00:00.000Z",
+      "bloodSugar": 120,
+      "medMorning": 1,
+      "medEvening": null,
+      "note": "หลังอาหาร",
+      "createdAt": "2026-05-04T10:00:00.000Z"
+    }
+  ],
+  "nextCursor": "uuid-of-last-record-or-null"
+}
 ```
+
+> `nextCursor` จะเป็น `null` เมื่อไม่มีข้อมูลเพิ่มแล้ว
 
 ---
 
