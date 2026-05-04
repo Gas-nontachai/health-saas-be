@@ -6,7 +6,7 @@ Base URL: `http://localhost:3000`
 
 Backend มี auth endpoints ให้ FE เรียกโดยตรง — ภายในจะ proxy ไปยัง **Keycloak** ให้อัตโนมัติ
 
-ทุก endpoint (ยกเว้น `GET /health`, `POST /auth/register`, `POST /auth/login`) ต้องส่ง **Bearer token** ผ่าน header:
+ทุก endpoint (ยกเว้น `GET /health`, `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/password/forgot/*`) ต้องส่ง **Bearer token** ผ่าน header:
 
 ```
 Authorization: Bearer <access_token>
@@ -34,6 +34,8 @@ Authorization: Bearer <access_token>
 3. FE เก็บ access_token + refresh_token
 4. FE ยิง API อื่นๆ ด้วย Authorization: Bearer <access_token>
 5. Backend verify token → upsert user → return data
+6. เมื่อ access_token หมดอายุ (5 นาที) → FE เรียก POST /auth/refresh ด้วย refresh_token
+7. ได้ access_token + refresh_token ชุดใหม่ → กลับไปข้อ 4
 ```
 
 ---
@@ -197,6 +199,159 @@ Authorization: Bearer <access_token>
   "name": "สมชาย"
 }
 ```
+
+---
+
+#### `POST /auth/refresh`
+
+ต่ออายุ token ด้วย refresh_token (ไม่ต้อง authentication)
+
+> access_token หมดอายุ **5 นาที**, refresh_token หมดอายุ **30 นาที**  
+> FE ควร refresh ก่อน access_token หมดอายุ หรือเมื่อได้ 401
+
+**Request Body:**
+
+| Field | Type | Required | Validation |
+|---|---|---|---|
+| `refreshToken` | `string` | ✅ | min 1 character |
+
+**Request Body Example:**
+
+```json
+{
+  "refreshToken": "eyJhbGciOi..."
+}
+```
+
+**Response** `200 OK`
+
+```json
+{
+  "access_token": "eyJhbGciOi...",
+  "expires_in": 300,
+  "refresh_expires_in": 1800,
+  "refresh_token": "eyJhbGciOi...",
+  "token_type": "Bearer",
+  "session_state": "uuid",
+  "scope": "profile email"
+}
+```
+
+**Errors:**
+
+| Status | Description |
+|---|---|
+| `400` | Validation error |
+| `401` | Invalid or expired refresh token |
+
+---
+
+#### `POST /auth/password/reset`
+
+เปลี่ยนรหัสผ่าน (ต้อง authentication — ต้องรู้รหัสผ่านเดิม)
+
+**Headers:** `Authorization: Bearer <access_token>`
+
+**Request Body:**
+
+| Field | Type | Required | Validation |
+|---|---|---|---|
+| `currentPassword` | `string` | ✅ | min 1 character |
+| `newPassword` | `string` | ✅ | min 8 characters |
+
+**Request Body Example:**
+
+```json
+{
+  "currentPassword": "OldP@ss123",
+  "newPassword": "NewP@ss456"
+}
+```
+
+**Response** `200 OK`
+
+```json
+{
+  "message": "Password has been reset"
+}
+```
+
+**Errors:**
+
+| Status | Description |
+|---|---|
+| `400` | Validation error |
+| `401` | Invalid current password / Missing token |
+
+---
+
+#### `POST /auth/password/forgot/request`
+
+ขอ OTP สำหรับ reset password ส่งไปทาง email (ไม่ต้อง authentication)
+
+**Request Body:**
+
+| Field | Type | Required | Validation |
+|---|---|---|---|
+| `email` | `string` | ✅ | valid email, จะถูก lowercase อัตโนมัติ |
+
+**Request Body Example:**
+
+```json
+{
+  "email": "user@example.com"
+}
+```
+
+**Response** `200 OK`
+
+```json
+{
+  "message": "If the email exists, an OTP has been sent"
+}
+```
+
+> Response จะเหมือนกันไม่ว่า email จะมีอยู่ในระบบหรือไม่ (ป้องกัน user enumeration)
+
+> OTP มีอายุ **10 นาที** และลองผิดได้สูงสุด **5 ครั้ง**
+
+---
+
+#### `POST /auth/password/forgot/confirm`
+
+ยืนยัน OTP แล้วตั้งรหัสผ่านใหม่ (ไม่ต้อง authentication)
+
+**Request Body:**
+
+| Field | Type | Required | Validation |
+|---|---|---|---|
+| `email` | `string` | ✅ | valid email, จะถูก lowercase อัตโนมัติ |
+| `otp` | `string` | ✅ | 6 หลักตัวเลข (regex: `^\d{6}$`) |
+| `newPassword` | `string` | ✅ | min 8 characters |
+
+**Request Body Example:**
+
+```json
+{
+  "email": "user@example.com",
+  "otp": "482019",
+  "newPassword": "NewP@ss456"
+}
+```
+
+**Response** `200 OK`
+
+```json
+{
+  "message": "Password has been reset"
+}
+```
+
+**Errors:**
+
+| Status | Description |
+|---|---|
+| `400` | Invalid or expired OTP / Validation error |
 
 ---
 
@@ -440,7 +595,20 @@ Authorization: Bearer <access_token>
 
 #### `GET /export`
 
-Export records เป็นไฟล์ Excel หรือ PDF (สูงสุด 1,000 records เรียงตาม datetime ASC)
+Export records เป็นรายงานสำหรับแพทย์/พยาบาล ในรูปแบบ Excel หรือ PDF (สูงสุด 1,000 records เรียงตาม datetime ASC)
+
+รายงานประกอบด้วย:
+- **ข้อมูลผู้ป่วย** — ชื่อ, email, น้ำหนัก, ส่วนสูง
+- **สรุปสถิติ** — จำนวน record, ค่าเฉลี่ย, ค่าต่ำสุด/สูงสุด, จำนวน Normal/Low/High
+- **ตาราง records** — แบ่งคอลัมน์ชัดเจน พร้อม color-coded status
+
+**Blood Sugar Classification:**
+
+| Status | Range | Color |
+|---|---|---|
+| Low | < 70 mg/dL | 🟠 Orange |
+| Normal | 70–180 mg/dL | 🟢 Green |
+| High | > 180 mg/dL | 🔴 Red |
 
 **Headers:** `Authorization: Bearer <token>`
 
@@ -457,7 +625,35 @@ Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
 Content-Disposition: attachment; filename="blood-sugar-records.xlsx"
 ```
 
-Body: binary Excel file buffer
+Body: binary Excel file — มี 2 sheets:
+
+**Sheet 1: Summary**
+
+| Row | Description |
+|---|---|
+| Patient Name | ชื่อผู้ป่วย |
+| Email | อีเมล |
+| Weight / Height | น้ำหนัก / ส่วนสูง (ถ้ามี) |
+| Export Date | วันที่ export |
+| Date Range | ช่วงเวลาของ records |
+| Total Records | จำนวน records ทั้งหมด |
+| Average / Min / Max | ค่าเฉลี่ย, ต่ำสุด, สูงสุด (mg/dL) |
+| Normal / Low / High | จำนวนและเปอร์เซ็นต์แต่ละระดับ |
+
+**Sheet 2: Records**
+
+| Column | Description |
+|---|---|
+| # | ลำดับ |
+| Date | วันที่ (YYYY-MM-DD) |
+| Time (UTC) | เวลา (HH:MM:SS) |
+| Blood Sugar (mg/dL) | ค่าน้ำตาลในเลือด |
+| Status | Low / Normal / High (color-coded) |
+| Morning Med | ยาเช้า |
+| Evening Med | ยาเย็น |
+| Note | หมายเหตุ |
+
+> Excel มี auto-filter, freeze header row, alternate row shading, cell borders
 
 **Response (PDF)** `200 OK`
 
@@ -466,17 +662,7 @@ Content-Type: application/pdf
 Content-Disposition: attachment; filename="blood-sugar-records.pdf"
 ```
 
-Body: binary PDF file buffer
-
-**Excel Columns:**
-
-| Column | Description |
-|---|---|
-| Datetime (UTC) | ISO 8601 datetime |
-| Blood Sugar | ค่าน้ำตาลในเลือด |
-| Morning Medicine | ยาเช้า |
-| Evening Medicine | ยาเย็น |
-| Note | หมายเหตุ |
+Body: binary PDF file (A4 landscape) — มี header ข้อมูลผู้ป่วย, สรุปสถิติ, ตาราง records พร้อม color-coded status, page number footer ทุกหน้า
 
 ---
 
@@ -516,3 +702,17 @@ Body: binary PDF file buffer
 | `createdAt` | `DateTime` | วันที่สร้าง |
 
 > Index: `(userId, datetime)` บน Record table
+
+### PasswordResetOtp
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `String (UUID)` | Primary key |
+| `email` | `String` | Email ที่ขอ reset |
+| `otpHash` | `String` | HMAC-SHA256 hash ของ OTP |
+| `expiresAt` | `DateTime` | วันหมดอายุ (10 นาที) |
+| `attempts` | `Int` | จำนวนครั้งที่ลองผิด (max 5) |
+| `consumedAt` | `DateTime?` | วันที่ใช้ OTP สำเร็จ |
+| `createdAt` | `DateTime` | วันที่สร้าง |
+
+> Index: `(email)`, `(expiresAt)` บน PasswordResetOtp table

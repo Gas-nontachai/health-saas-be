@@ -41,6 +41,7 @@ export type KeycloakUser = {
 export type KeycloakAuthService = {
   register(input: RegisterInput): Promise<KeycloakTokenResponse>;
   login(input: LoginInput): Promise<KeycloakTokenResponse>;
+  refreshToken(refreshToken: string): Promise<KeycloakTokenResponse>;
   resetPassword(input: ResetPasswordInput): Promise<void>;
   findUserByEmail(email: string): Promise<KeycloakUser | null>;
   setPassword(keycloakId: string, newPassword: string): Promise<void>;
@@ -55,6 +56,9 @@ export function createKeycloakAuthService(config: AppConfig): KeycloakAuthServic
     },
     async login(input) {
       return getUserToken(config, input);
+    },
+    async refreshToken(refreshToken) {
+      return refreshUserToken(config, refreshToken);
     },
     async resetPassword(input) {
       await getUserToken(config, { email: input.email, password: input.currentPassword });
@@ -190,6 +194,33 @@ async function getUserToken(config: AppConfig, input: LoginInput): Promise<Keycl
 
   if (response.status === 400 || response.status === 401) {
     throw new HttpError(401, "Invalid email or password");
+  }
+
+  return parseKeycloakResponse<KeycloakTokenResponse>(response);
+}
+
+async function refreshUserToken(config: AppConfig, refreshToken: string): Promise<KeycloakTokenResponse> {
+  const body = new URLSearchParams({
+    client_id: config.KEYCLOAK_CLIENT_ID,
+    grant_type: "refresh_token",
+    refresh_token: refreshToken
+  });
+
+  if (config.KEYCLOAK_CLIENT_SECRET) {
+    body.set("client_secret", config.KEYCLOAK_CLIENT_SECRET);
+  }
+
+  const response = await fetch(
+    `${config.KEYCLOAK_BASE_URL}/realms/${encodeURIComponent(config.KEYCLOAK_REALM)}/protocol/openid-connect/token`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body
+    }
+  );
+
+  if (response.status === 400 || response.status === 401) {
+    throw new HttpError(401, "Invalid or expired refresh token");
   }
 
   return parseKeycloakResponse<KeycloakTokenResponse>(response);

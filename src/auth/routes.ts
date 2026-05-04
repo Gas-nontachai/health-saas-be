@@ -32,6 +32,10 @@ const forgotPasswordConfirmSchema = z.object({
   newPassword: z.string().min(8)
 });
 
+const refreshTokenSchema = z.object({
+  refreshToken: z.string().min(1)
+});
+
 export async function registerAuthRoutes(
   app: FastifyInstance,
   keycloakAuth: KeycloakAuthService,
@@ -50,6 +54,11 @@ export async function registerAuthRoutes(
   });
 
   app.get("/auth/me", { preHandler: app.authenticate }, async (request) => request.user);
+
+  app.post("/auth/refresh", async (request) => {
+    const body = refreshTokenSchema.parse(request.body);
+    return keycloakAuth.refreshToken(body.refreshToken);
+  });
 
   app.post("/auth/password/reset", { preHandler: app.authenticate }, async (request) => {
     const body = resetPasswordSchema.parse(request.body);
