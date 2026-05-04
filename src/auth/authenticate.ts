@@ -41,7 +41,7 @@ export function createAuthenticate(config: AppConfig, prisma: AppPrisma): preHan
 
     const user = await prisma.user.upsert({
       where: { keycloakId: payload.sub },
-      update: { email, name },
+      update: {},
       create: {
         keycloakId: payload.sub,
         email,

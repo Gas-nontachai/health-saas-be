@@ -55,7 +55,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 
   await registerAuthRoutes(app, keycloakAuth, passwordReset);
   await registerRecordRoutes(app, options.prisma);
-  await registerProfileRoutes(app, options.prisma);
+  await registerProfileRoutes(app, options.prisma, keycloakAuth);
   await registerDashboardRoutes(app, options.prisma);
   await registerExportRoutes(app, options.prisma);
 

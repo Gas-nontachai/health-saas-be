@@ -38,6 +38,13 @@ export type KeycloakUser = {
   username?: string;
 };
 
+export type UpdateUserInput = {
+  keycloakId: string;
+  email?: string;
+  firstName?: string;
+  lastName?: string;
+};
+
 export type KeycloakAuthService = {
   register(input: RegisterInput): Promise<KeycloakTokenResponse>;
   login(input: LoginInput): Promise<KeycloakTokenResponse>;
@@ -45,6 +52,7 @@ export type KeycloakAuthService = {
   resetPassword(input: ResetPasswordInput): Promise<void>;
   findUserByEmail(email: string): Promise<KeycloakUser | null>;
   setPassword(keycloakId: string, newPassword: string): Promise<void>;
+  updateUser(input: UpdateUserInput): Promise<void>;
 };
 
 export function createKeycloakAuthService(config: AppConfig): KeycloakAuthService {
@@ -72,6 +80,10 @@ export function createKeycloakAuthService(config: AppConfig): KeycloakAuthServic
     async setPassword(keycloakId, newPassword) {
       const adminToken = await getAdminToken(config);
       await resetKeycloakPassword(config, adminToken, keycloakId, newPassword);
+    },
+    async updateUser(input) {
+      const adminToken = await getAdminToken(config);
+      await updateKeycloakUser(config, adminToken, input);
     }
   };
 }
@@ -164,6 +176,37 @@ async function resetKeycloakPassword(config: AppConfig, adminToken: string, keyc
       })
     }
   );
+
+  if (!response.ok) {
+    const message = await readKeycloakError(response);
+    throw new HttpError(response.status, message);
+  }
+}
+
+async function updateKeycloakUser(config: AppConfig, adminToken: string, input: UpdateUserInput): Promise<void> {
+  const body: Record<string, string> = {};
+  if (input.email !== undefined) {
+    body.email = input.email;
+    body.username = input.email;
+  }
+  if (input.firstName !== undefined) body.firstName = input.firstName;
+  if (input.lastName !== undefined) body.lastName = input.lastName;
+
+  const response = await fetch(
+    `${config.KEYCLOAK_BASE_URL}/admin/realms/${encodeURIComponent(config.KEYCLOAK_REALM)}/users/${encodeURIComponent(input.keycloakId)}`,
+    {
+      method: "PUT",
+      headers: {
+        authorization: `Bearer ${adminToken}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(body)
+    }
+  );
+
+  if (response.status === 409) {
+    throw new HttpError(409, "Email already in use");
+  }
 
   if (!response.ok) {
     const message = await readKeycloakError(response);

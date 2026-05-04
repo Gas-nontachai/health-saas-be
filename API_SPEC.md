@@ -515,7 +515,7 @@ Authorization: Bearer <access_token>
 
 #### `GET /profile`
 
-ดึง profile ของ user ปัจจุบัน (สร้างให้อัตโนมัติถ้ายังไม่มี)
+ดึง profile ของ user ปัจจุบัน (สร้างให้อัตโนมัติถ้ายังไม่มี) รวมข้อมูล email และ name จาก user
 
 **Headers:** `Authorization: Bearer <token>`
 
@@ -527,7 +527,9 @@ Authorization: Bearer <access_token>
   "userId": "uuid",
   "weight": 70.5,
   "height": 175.0,
-  "createdAt": "2026-05-04T10:00:00.000Z"
+  "createdAt": "2026-05-04T10:00:00.000Z",
+  "email": "user@example.com",
+  "name": "John Doe"
 }
 ```
 
@@ -535,7 +537,7 @@ Authorization: Bearer <access_token>
 
 #### `PUT /profile`
 
-อัปเดต profile (สร้างให้อัตโนมัติถ้ายังไม่มี)
+อัปเดต profile (สร้างให้อัตโนมัติถ้ายังไม่มี) สามารถแก้ชื่อ/email ได้ (sync กับ Keycloak)
 
 **Headers:** `Authorization: Bearer <token>`
 
@@ -543,6 +545,9 @@ Authorization: Bearer <access_token>
 
 | Field | Type | Required | Validation |
 |---|---|---|---|
+| `firstName` | `string` | ❌ | min 1, max 100 |
+| `lastName` | `string` | ❌ | min 1, max 100 |
+| `email` | `string` | ❌ | valid email format |
 | `weight` | `number \| null` | ❌ | positive number |
 | `height` | `number \| null` | ❌ | positive number |
 
@@ -550,6 +555,9 @@ Authorization: Bearer <access_token>
 
 ```json
 {
+  "firstName": "John",
+  "lastName": "Doe",
+  "email": "new@example.com",
   "weight": 72.3,
   "height": 175.0
 }
@@ -563,9 +571,13 @@ Authorization: Bearer <access_token>
   "userId": "uuid",
   "weight": 72.3,
   "height": 175.0,
-  "createdAt": "2026-05-04T10:00:00.000Z"
+  "createdAt": "2026-05-04T10:00:00.000Z",
+  "email": "new@example.com",
+  "name": "John Doe"
 }
 ```
+
+**Error** `409 Conflict` — email ซ้ำกับ user อื่น
 
 ---
 
