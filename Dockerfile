@@ -14,11 +14,12 @@ FROM deps AS build
 WORKDIR /app
 
 COPY prisma ./prisma
+COPY scripts ./scripts
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
 
 RUN npx prisma generate
-RUN npm run build
+RUN SKIP_PRISMA_MIGRATE=1 npm run build
 RUN npm prune --omit=dev
 
 FROM base AS runtime
