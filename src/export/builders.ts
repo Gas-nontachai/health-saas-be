@@ -89,16 +89,16 @@ const PDF_FONT_LATIN_REGULAR_PATH = require.resolve("@fontsource/noto-sans-thai/
 const PDF_FONT_LATIN_BOLD_PATH = require.resolve("@fontsource/noto-sans-thai/files/noto-sans-thai-latin-700-normal.woff");
 const PDF_FONT_REGULAR_PATH = resolvePdfFontPath(
   [
-    "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
     "/usr/share/fonts/truetype/tlwg/Garuda.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
     "/Library/Fonts/Arial Unicode.ttf"
   ],
   require.resolve("@fontsource/noto-sans-thai/files/noto-sans-thai-thai-400-normal.woff")
 );
 const PDF_FONT_BOLD_PATH = resolvePdfFontPath(
   [
-    "/usr/share/fonts/truetype/noto/NotoSansThai-Bold.ttf",
     "/usr/share/fonts/truetype/tlwg/Garuda-Bold.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansThai-Bold.ttf",
     "/Library/Fonts/Arial Unicode.ttf"
   ],
   require.resolve("@fontsource/noto-sans-thai/files/noto-sans-thai-thai-700-normal.woff")
