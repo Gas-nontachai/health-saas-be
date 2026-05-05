@@ -77,6 +77,18 @@ function mockPasswordReset() {
   };
 }
 
+function countPdfPages(buffer: Buffer): number {
+  const text = buffer.toString("latin1");
+  return text.match(/\/Type\s*\/Page\b/g)?.length ?? 0;
+}
+
+function getFirstPdfMediaBox(buffer: Buffer): { width: number; height: number } {
+  const text = buffer.toString("latin1");
+  const mediaBox = text.match(/\/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)\s*\]/);
+  if (!mediaBox) throw new Error("PDF MediaBox not found");
+  return { width: Number(mediaBox[1]), height: Number(mediaBox[2]) };
+}
+
 describe("app", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -520,12 +532,88 @@ describe("app", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("application/pdf");
+    expect(countPdfPages(response.rawPayload)).toBe(1);
+    expect(getFirstPdfMediaBox(response.rawPayload)).toMatchObject({ width: 595.28, height: 841.89 });
     expect(prisma.record.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { userId: "user-1" },
         take: 1000
       })
     );
+    await app.close();
+  });
+
+  it("exports one-page portrait pdfs with Thai text", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.record.findMany).mockResolvedValue([
+      {
+        datetime: new Date("2026-05-05T14:27:00.000Z"),
+        bloodSugar: 0,
+        medMorning: 20,
+        medEvening: 20,
+        note: "วัดไม่ได้ อาหารเย็น"
+      }
+    ] as Awaited<ReturnType<typeof prisma.record.findMany>>);
+    const app = await buildApp({
+      config,
+      prisma,
+      authenticate: mockAuth("user-1"),
+      logger: false
+    });
+
+    const response = await app.inject({ method: "GET", url: "/export?type=pdf" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.rawPayload.length).toBeGreaterThan(0);
+    expect(countPdfPages(response.rawPayload)).toBe(1);
+    const mediaBox = getFirstPdfMediaBox(response.rawPayload);
+    expect(mediaBox.height).toBeGreaterThan(mediaBox.width);
+    expect(response.rawPayload.toString("latin1")).toContain("/FontFile");
+    await app.close();
+  });
+
+  it("exports portrait pdfs with wrapped long Thai notes", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.record.findMany).mockResolvedValue([
+      {
+        datetime: new Date("2026-05-05T14:27:00.000Z"),
+        bloodSugar: 0,
+        medMorning: 20,
+        medEvening: 20,
+        note: "วัดไม่ได้ อาหารเย็น ".repeat(35).trim()
+      }
+    ] as Awaited<ReturnType<typeof prisma.record.findMany>>);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/export?type=pdf" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.rawPayload.length).toBeGreaterThan(0);
+    const mediaBox = getFirstPdfMediaBox(response.rawPayload);
+    expect(mediaBox.height).toBeGreaterThan(mediaBox.width);
+    expect(response.rawPayload.toString("latin1")).toContain("/FontFile");
+    await app.close();
+  });
+
+  it("exports portrait pdfs with numbers, symbols, and emoji in Thai notes", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.record.findMany).mockResolvedValue([
+      {
+        datetime: new Date("2026-05-05T14:27:00.000Z"),
+        bloodSugar: 0,
+        medMorning: 20,
+        medEvening: 20,
+        note: "*ระดับน้ำตาล 0 คือไม่ได้เจาะตรวจ #1 @home ✓ ≤70 ≥180 🙂"
+      }
+    ] as Awaited<ReturnType<typeof prisma.record.findMany>>);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/export?type=pdf" });
+
+    expect(response.statusCode).toBe(200);
+    expect(countPdfPages(response.rawPayload)).toBe(1);
+    expect(getFirstPdfMediaBox(response.rawPayload)).toMatchObject({ width: 595.28, height: 841.89 });
+    expect(response.rawPayload.toString("latin1")).toContain("/FontFile");
     await app.close();
   });
 
@@ -537,7 +625,7 @@ describe("app", () => {
         bloodSugar: 0,
         medMorning: 1,
         medEvening: null,
-        note: "not measured"
+        note: "วัดไม่ได้ อาหารเย็น"
       },
       {
         datetime: new Date("2026-05-02T10:00:00.000Z"),
@@ -566,6 +654,9 @@ describe("app", () => {
     expect(records?.getCell("D2").value).toBe(0);
     expect(records?.getCell("E2").value).toBe("Not measured");
     expect(records?.getCell("E3").value).toBe("Normal");
+    expect(records?.getCell("H2").value).toBe("วัดไม่ได้ อาหารเย็น");
+    expect(records?.getCell("H2").alignment?.wrapText).toBe(true);
+    expect(records?.getCell("H2").alignment?.vertical).toBe("top");
     await app.close();
   });
 });
