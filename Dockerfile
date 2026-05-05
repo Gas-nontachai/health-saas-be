@@ -14,6 +14,7 @@ FROM deps AS build
 WORKDIR /app
 
 COPY prisma ./prisma
+COPY assets ./assets
 COPY scripts ./scripts
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
@@ -28,6 +29,7 @@ ENV NODE_ENV=production
 
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package*.json ./
+COPY --from=build /app/assets ./assets
 COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/dist ./dist
 
