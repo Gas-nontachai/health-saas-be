@@ -59,3 +59,19 @@ curl -X POST https://<render-service-url>/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"<existing-user-email>","password":"<password>"}'
 ```
+
+## Keepalive for Free Render Services
+
+Render Free web services spin down after 15 minutes without inbound traffic. This repository includes a GitHub Actions workflow that can ping one or more `/health` URLs every 10 minutes.
+
+In GitHub, configure a repository variable:
+
+```text
+KEEPALIVE_URLS=https://<prod-render-url>/health,https://<dev-render-url>/health
+```
+
+Notes:
+
+- Scheduled GitHub Actions run from the default branch.
+- Keeping a free service awake consumes Render free instance hours.
+- If prod and dev are in the same Render workspace, two always-awake services can exceed the monthly free quota.
