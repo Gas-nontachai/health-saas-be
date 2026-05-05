@@ -17,21 +17,21 @@
     "@fastify/helmet": "^13.0.2",
     "@fastify/rate-limit": "^10.3.0",
     "@prisma/client": "^5.22.0",
+    "@types/node": "^22.10.2",
     "dotenv": "^16.4.7",
     "exceljs": "^4.4.0",
     "fastify": "^5.8.5",
     "jose": "^5.9.6",
     "nodemailer": "^8.0.7",
     "pdfkit": "^0.15.2",
+    "prisma": "^5.22.0",
+    "typescript": "^5.7.2",
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
     "@types/nodemailer": "^8.0.0",
     "@types/pdfkit": "^0.13.8",
-    "prisma": "^5.22.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }
 }
