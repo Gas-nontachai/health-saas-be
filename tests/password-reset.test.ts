@@ -33,7 +33,8 @@ function mockKeycloakAuth() {
     refreshToken: vi.fn(),
     resetPassword: vi.fn(),
     findUserByEmail: vi.fn(),
-    setPassword: vi.fn()
+    setPassword: vi.fn(),
+    updateUser: vi.fn()
   };
 }
 

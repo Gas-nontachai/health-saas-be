@@ -44,7 +44,8 @@ function mockPrisma(overrides: Partial<AppPrisma> = {}): AppPrisma {
       })
     },
     profile: {
-      upsert: vi.fn()
+      upsert: vi.fn(),
+      findUnique: vi.fn().mockResolvedValue(null)
     },
     passwordResetOtp: {
       create: vi.fn(),
@@ -62,7 +63,8 @@ function mockKeycloakAuth() {
     refreshToken: vi.fn(),
     resetPassword: vi.fn(),
     findUserByEmail: vi.fn(),
-    setPassword: vi.fn()
+    setPassword: vi.fn(),
+    updateUser: vi.fn()
   };
 }
 
@@ -340,11 +342,23 @@ describe("app", () => {
     const response = await app.inject({ method: "GET", url: "/dashboard?range=7d" });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({
-      avg: 120,
-      min: 80,
-      max: 180,
-      trend: [{ datetime: "2026-05-01T10:00:00.000Z", value: 120 }]
+    expect(response.json()).toMatchObject({
+      range: "7d",
+      widgets: {
+        summary: {
+          status: "ok",
+          data: {
+            avg: 120,
+            min: 120,
+            max: 120,
+            count: 1
+          }
+        },
+        trend: {
+          status: "ok",
+          data: [{ datetime: "2026-05-01T10:00:00.000Z", value: 120 }]
+        }
+      }
     });
     await app.close();
   });
