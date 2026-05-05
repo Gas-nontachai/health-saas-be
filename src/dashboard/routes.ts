@@ -98,6 +98,10 @@ type RecordRow = {
 
 type ProfileRow = { weight: number | null; height: number | null } | null;
 
+function isMeasuredBloodSugar(record: RecordRow): boolean {
+  return record.bloodSugar > 0;
+}
+
 // ——— Widget builder ———
 
 function buildWidget(key: WidgetKey, records: RecordRow[], profile: ProfileRow, range: string): WidgetResult {
@@ -132,14 +136,15 @@ function buildWidget(key: WidgetKey, records: RecordRow[], profile: ProfileRow, 
 // ——— 1. Summary (avg / min / max) ———
 
 function buildSummary(records: RecordRow[]): WidgetResult {
-  if (records.length === 0) {
-    return { status: "insufficient_data", message: "No records in selected range", data: null };
+  const measuredRecords = records.filter(isMeasuredBloodSugar);
+  if (measuredRecords.length === 0) {
+    return { status: "insufficient_data", message: "No measured blood sugar records in selected range", data: null };
   }
 
   let sum = 0;
   let min = Infinity;
   let max = -Infinity;
-  for (const r of records) {
+  for (const r of measuredRecords) {
     sum += r.bloodSugar;
     if (r.bloodSugar < min) min = r.bloodSugar;
     if (r.bloodSugar > max) max = r.bloodSugar;
@@ -148,10 +153,10 @@ function buildSummary(records: RecordRow[]): WidgetResult {
   return {
     status: "ok",
     data: {
-      avg: Math.round(sum / records.length),
+      avg: Math.round(sum / measuredRecords.length),
       min,
       max,
-      count: records.length
+      count: measuredRecords.length
     }
   };
 }
@@ -159,13 +164,14 @@ function buildSummary(records: RecordRow[]): WidgetResult {
 // ——— 2. Trend (line chart data) ———
 
 function buildTrend(records: RecordRow[]): WidgetResult {
-  if (records.length === 0) {
-    return { status: "insufficient_data", message: "No records in selected range", data: [] };
+  const measuredRecords = records.filter(isMeasuredBloodSugar);
+  if (measuredRecords.length === 0) {
+    return { status: "insufficient_data", message: "No measured blood sugar records in selected range", data: [] };
   }
 
   return {
     status: "ok",
-    data: records.map((r) => ({
+    data: measuredRecords.map((r) => ({
       datetime: r.datetime.toISOString(),
       value: r.bloodSugar
     }))
@@ -175,20 +181,21 @@ function buildTrend(records: RecordRow[]): WidgetResult {
 // ——— 3. Time in Range ———
 
 function buildTimeInRange(records: RecordRow[]): WidgetResult {
-  if (records.length === 0) {
-    return { status: "insufficient_data", message: "No records in selected range", data: null };
+  const measuredRecords = records.filter(isMeasuredBloodSugar);
+  if (measuredRecords.length === 0) {
+    return { status: "insufficient_data", message: "No measured blood sugar records in selected range", data: null };
   }
 
   let low = 0;
   let normal = 0;
   let high = 0;
-  for (const r of records) {
+  for (const r of measuredRecords) {
     if (r.bloodSugar < BS_LOW) low++;
     else if (r.bloodSugar > BS_HIGH) high++;
     else normal++;
   }
 
-  const total = records.length;
+  const total = measuredRecords.length;
   return {
     status: "ok",
     data: {
@@ -203,8 +210,9 @@ function buildTimeInRange(records: RecordRow[]): WidgetResult {
 // ——— 4. Distribution (histogram buckets) ———
 
 function buildDistribution(records: RecordRow[]): WidgetResult {
-  if (records.length === 0) {
-    return { status: "insufficient_data", message: "No records in selected range", data: [] };
+  const measuredRecords = records.filter(isMeasuredBloodSugar);
+  if (measuredRecords.length === 0) {
+    return { status: "insufficient_data", message: "No measured blood sugar records in selected range", data: [] };
   }
 
   const buckets = [
@@ -216,7 +224,7 @@ function buildDistribution(records: RecordRow[]): WidgetResult {
     { label: ">250", min: 251, max: 9999, count: 0 }
   ];
 
-  for (const r of records) {
+  for (const r of measuredRecords) {
     const bucket = buckets.find((b) => r.bloodSugar >= b.min && r.bloodSugar <= b.max);
     if (bucket) bucket.count++;
   }
@@ -230,7 +238,8 @@ function buildDistribution(records: RecordRow[]): WidgetResult {
 // ——— 5. Daily Pattern (avg by time-of-day) ———
 
 function buildDailyPattern(records: RecordRow[]): WidgetResult {
-  if (records.length < 3) {
+  const measuredRecords = records.filter(isMeasuredBloodSugar);
+  if (measuredRecords.length < 3) {
     return { status: "insufficient_data", message: "Need at least 3 records to analyze daily pattern", data: null };
   }
 
@@ -241,7 +250,7 @@ function buildDailyPattern(records: RecordRow[]): WidgetResult {
     night: { sum: 0, count: 0 }
   };
 
-  for (const r of records) {
+  for (const r of measuredRecords) {
     const hour = r.datetime.getUTCHours();
     let slot: string;
     if (hour >= 6 && hour < 12) slot = "morning";
@@ -265,13 +274,14 @@ function buildDailyPattern(records: RecordRow[]): WidgetResult {
 // ——— 6. Weekly Average ———
 
 function buildWeeklyAverage(records: RecordRow[]): WidgetResult {
-  if (records.length < 2) {
+  const measuredRecords = records.filter(isMeasuredBloodSugar);
+  if (measuredRecords.length < 2) {
     return { status: "insufficient_data", message: "Need at least 2 records to compute weekly averages", data: [] };
   }
 
   const weekMap = new Map<string, { sum: number; count: number; min: number; max: number }>();
 
-  for (const r of records) {
+  for (const r of measuredRecords) {
     const weekKey = getIsoWeek(r.datetime);
     const entry = weekMap.get(weekKey) ?? { sum: 0, count: 0, min: Infinity, max: -Infinity };
     entry.sum += r.bloodSugar;
@@ -339,15 +349,16 @@ function buildMedAdherence(records: RecordRow[]): WidgetResult {
 // ——— 8. Med vs No-Med Comparison ———
 
 function buildMedComparison(records: RecordRow[]): WidgetResult {
-  const hasMedData = records.some((r) => r.medMorning != null || r.medEvening != null);
-  if (!hasMedData || records.length < 3) {
+  const measuredRecords = records.filter(isMeasuredBloodSugar);
+  const hasMedData = measuredRecords.some((r) => r.medMorning != null || r.medEvening != null);
+  if (!hasMedData || measuredRecords.length < 3) {
     return { status: "insufficient_data", message: "Need at least 3 records with medication data", data: null };
   }
 
   const withMed: number[] = [];
   const withoutMed: number[] = [];
 
-  for (const r of records) {
+  for (const r of measuredRecords) {
     const tookMed = (r.medMorning != null && r.medMorning > 0) || (r.medEvening != null && r.medEvening > 0);
     if (tookMed) withMed.push(r.bloodSugar);
     else withoutMed.push(r.bloodSugar);
@@ -430,11 +441,12 @@ function buildLoggingStreak(records: RecordRow[]): WidgetResult {
 // ——— 10. Recent Alerts ———
 
 function buildRecentAlerts(records: RecordRow[]): WidgetResult {
-  if (records.length === 0) {
-    return { status: "insufficient_data", message: "No records in selected range", data: [] };
+  const measuredRecords = records.filter(isMeasuredBloodSugar);
+  if (measuredRecords.length === 0) {
+    return { status: "insufficient_data", message: "No measured blood sugar records in selected range", data: [] };
   }
 
-  const alerts = records
+  const alerts = measuredRecords
     .filter((r) => r.bloodSugar < BS_LOW || r.bloodSugar > BS_HIGH)
     .slice(-10)
     .reverse()
@@ -483,11 +495,12 @@ function buildPeriodComparison(records: RecordRow[], range: string): WidgetResul
   const previousStart = new Date(currentStart);
   previousStart.setUTCDate(previousStart.getUTCDate() - days);
 
-  const current = records.filter((r) => r.datetime >= currentStart);
-  const previous = records.filter((r) => r.datetime >= previousStart && r.datetime < currentStart);
+  const measuredRecords = records.filter(isMeasuredBloodSugar);
+  const current = measuredRecords.filter((r) => r.datetime >= currentStart);
+  const previous = measuredRecords.filter((r) => r.datetime >= previousStart && r.datetime < currentStart);
 
   if (current.length === 0 && previous.length === 0) {
-    return { status: "insufficient_data", message: "No records in current or previous period", data: null };
+    return { status: "insufficient_data", message: "No measured blood sugar records in current or previous period", data: null };
   }
 
   const currentAvg = current.length > 0 ? Math.round(avg(current.map((r) => r.bloodSugar))) : null;
