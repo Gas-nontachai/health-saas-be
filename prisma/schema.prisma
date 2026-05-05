@@ -39,3 +39,16 @@ model Record {
 
   @@index([userId, datetime])
 }
+
+model PasswordResetOtp {
+  id         String    @id @default(uuid())
+  email      String
+  otpHash    String
+  expiresAt  DateTime
+  attempts   Int       @default(0)
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([email])
+  @@index([expiresAt])
+}

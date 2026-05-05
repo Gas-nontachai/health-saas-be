@@ -25,9 +25,34 @@ export type LoginInput = {
   password: string;
 };
 
+export type ResetPasswordInput = {
+  keycloakId: string;
+  email: string;
+  currentPassword: string;
+  newPassword: string;
+};
+
+export type KeycloakUser = {
+  id: string;
+  email?: string;
+  username?: string;
+};
+
+export type UpdateUserInput = {
+  keycloakId: string;
+  email?: string;
+  firstName?: string;
+  lastName?: string;
+};
+
 export type KeycloakAuthService = {
   register(input: RegisterInput): Promise<KeycloakTokenResponse>;
   login(input: LoginInput): Promise<KeycloakTokenResponse>;
+  refreshToken(refreshToken: string): Promise<KeycloakTokenResponse>;
+  resetPassword(input: ResetPasswordInput): Promise<void>;
+  findUserByEmail(email: string): Promise<KeycloakUser | null>;
+  setPassword(keycloakId: string, newPassword: string): Promise<void>;
+  updateUser(input: UpdateUserInput): Promise<void>;
 };
 
 export function createKeycloakAuthService(config: AppConfig): KeycloakAuthService {
@@ -39,6 +64,26 @@ export function createKeycloakAuthService(config: AppConfig): KeycloakAuthServic
     },
     async login(input) {
       return getUserToken(config, input);
+    },
+    async refreshToken(refreshToken) {
+      return refreshUserToken(config, refreshToken);
+    },
+    async resetPassword(input) {
+      await getUserToken(config, { email: input.email, password: input.currentPassword });
+      const adminToken = await getAdminToken(config);
+      await resetKeycloakPassword(config, adminToken, input.keycloakId, input.newPassword);
+    },
+    async findUserByEmail(email) {
+      const adminToken = await getAdminToken(config);
+      return findKeycloakUserByEmail(config, adminToken, email);
+    },
+    async setPassword(keycloakId, newPassword) {
+      const adminToken = await getAdminToken(config);
+      await resetKeycloakPassword(config, adminToken, keycloakId, newPassword);
+    },
+    async updateUser(input) {
+      const adminToken = await getAdminToken(config);
+      await updateKeycloakUser(config, adminToken, input);
     }
   };
 }
@@ -99,6 +144,76 @@ async function createKeycloakUser(config: AppConfig, adminToken: string, input: 
   }
 }
 
+async function findKeycloakUserByEmail(config: AppConfig, adminToken: string, email: string): Promise<KeycloakUser | null> {
+  const url = new URL(`${config.KEYCLOAK_BASE_URL}/admin/realms/${encodeURIComponent(config.KEYCLOAK_REALM)}/users`);
+  url.searchParams.set("email", email);
+  url.searchParams.set("exact", "true");
+  url.searchParams.set("max", "2");
+
+  const response = await fetch(url, {
+    headers: {
+      authorization: `Bearer ${adminToken}`
+    }
+  });
+
+  const users = await parseKeycloakResponse<KeycloakUser[]>(response);
+  return users.find((user) => user.email?.toLowerCase() === email.toLowerCase() || user.username?.toLowerCase() === email.toLowerCase()) ?? null;
+}
+
+async function resetKeycloakPassword(config: AppConfig, adminToken: string, keycloakId: string, newPassword: string): Promise<void> {
+  const response = await fetch(
+    `${config.KEYCLOAK_BASE_URL}/admin/realms/${encodeURIComponent(config.KEYCLOAK_REALM)}/users/${encodeURIComponent(keycloakId)}/reset-password`,
+    {
+      method: "PUT",
+      headers: {
+        authorization: `Bearer ${adminToken}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        type: "password",
+        value: newPassword,
+        temporary: false
+      })
+    }
+  );
+
+  if (!response.ok) {
+    const message = await readKeycloakError(response);
+    throw new HttpError(response.status, message);
+  }
+}
+
+async function updateKeycloakUser(config: AppConfig, adminToken: string, input: UpdateUserInput): Promise<void> {
+  const body: Record<string, string> = {};
+  if (input.email !== undefined) {
+    body.email = input.email;
+    body.username = input.email;
+  }
+  if (input.firstName !== undefined) body.firstName = input.firstName;
+  if (input.lastName !== undefined) body.lastName = input.lastName;
+
+  const response = await fetch(
+    `${config.KEYCLOAK_BASE_URL}/admin/realms/${encodeURIComponent(config.KEYCLOAK_REALM)}/users/${encodeURIComponent(input.keycloakId)}`,
+    {
+      method: "PUT",
+      headers: {
+        authorization: `Bearer ${adminToken}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(body)
+    }
+  );
+
+  if (response.status === 409) {
+    throw new HttpError(409, "Email already in use");
+  }
+
+  if (!response.ok) {
+    const message = await readKeycloakError(response);
+    throw new HttpError(response.status, message);
+  }
+}
+
 async function getUserToken(config: AppConfig, input: LoginInput): Promise<KeycloakTokenResponse> {
   const body = new URLSearchParams({
     client_id: config.KEYCLOAK_CLIENT_ID,
@@ -122,6 +237,33 @@ async function getUserToken(config: AppConfig, input: LoginInput): Promise<Keycl
 
   if (response.status === 400 || response.status === 401) {
     throw new HttpError(401, "Invalid email or password");
+  }
+
+  return parseKeycloakResponse<KeycloakTokenResponse>(response);
+}
+
+async function refreshUserToken(config: AppConfig, refreshToken: string): Promise<KeycloakTokenResponse> {
+  const body = new URLSearchParams({
+    client_id: config.KEYCLOAK_CLIENT_ID,
+    grant_type: "refresh_token",
+    refresh_token: refreshToken
+  });
+
+  if (config.KEYCLOAK_CLIENT_SECRET) {
+    body.set("client_secret", config.KEYCLOAK_CLIENT_SECRET);
+  }
+
+  const response = await fetch(
+    `${config.KEYCLOAK_BASE_URL}/realms/${encodeURIComponent(config.KEYCLOAK_REALM)}/protocol/openid-connect/token`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body
+    }
+  );
+
+  if (response.status === 400 || response.status === 401) {
+    throw new HttpError(401, "Invalid or expired refresh token");
   }
 
   return parseKeycloakResponse<KeycloakTokenResponse>(response);

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AppConfig } from "../src/config.js";
 import type { AppPrisma } from "../src/prisma.js";
+import { HttpError } from "../src/shared/errors.js";
 
 const config: AppConfig = {
   NODE_ENV: "test",
@@ -13,7 +14,8 @@ const config: AppConfig = {
   KEYCLOAK_CLIENT_ID: "blood-sugar-api",
   KEYCLOAK_ADMIN_USERNAME: "admin",
   KEYCLOAK_ADMIN_PASSWORD: "admin",
-  KEYCLOAK_JWKS_URL: "http://localhost:8080/realms/blood-sugar/protocol/openid-connect/certs"
+  KEYCLOAK_JWKS_URL: "http://localhost:8080/realms/blood-sugar/protocol/openid-connect/certs",
+  RESET_OTP_SECRET: "test-reset-otp-secret-that-is-long-enough"
 };
 
 function mockAuth(userId = "user-1") {
@@ -42,10 +44,36 @@ function mockPrisma(overrides: Partial<AppPrisma> = {}): AppPrisma {
       })
     },
     profile: {
-      upsert: vi.fn()
+      upsert: vi.fn(),
+      findUnique: vi.fn().mockResolvedValue(null)
+    },
+    passwordResetOtp: {
+      create: vi.fn(),
+      findFirst: vi.fn(),
+      update: vi.fn()
     },
     ...overrides
   } as unknown as AppPrisma;
+}
+
+function mockKeycloakAuth() {
+  return {
+    register: vi.fn(),
+    login: vi.fn(),
+    refreshToken: vi.fn(),
+    resetPassword: vi.fn(),
+    findUserByEmail: vi.fn(),
+    setPassword: vi.fn(),
+    updateUser: vi.fn()
+  };
+}
+
+function mockPasswordReset() {
+  return {
+    resetPassword: vi.fn(),
+    requestForgotPassword: vi.fn().mockResolvedValue({ message: "If the email exists, an OTP has been sent" }),
+    confirmForgotPassword: vi.fn()
+  };
 }
 
 describe("app", () => {
@@ -64,14 +92,12 @@ describe("app", () => {
   });
 
   it("registers users through Keycloak and returns tokens", async () => {
-    const keycloakAuth = {
-      register: vi.fn().mockResolvedValue({
-        access_token: "access-token",
-        expires_in: 300,
-        token_type: "Bearer"
-      }),
-      login: vi.fn()
-    };
+    const keycloakAuth = mockKeycloakAuth();
+    keycloakAuth.register.mockResolvedValue({
+      access_token: "access-token",
+      expires_in: 300,
+      token_type: "Bearer"
+    });
     const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth(), keycloakAuth, logger: false });
 
     const response = await app.inject({
@@ -80,7 +106,7 @@ describe("app", () => {
       payload: {
         email: "Tester@Example.com",
         password: "password123",
-        name: "Tester"
+        firstName: "Tester"
       }
     });
 
@@ -93,21 +119,19 @@ describe("app", () => {
     expect(keycloakAuth.register).toHaveBeenCalledWith({
       email: "tester@example.com",
       password: "password123",
-      name: "Tester"
+      firstName: "Tester"
     });
     await app.close();
   });
 
   it("logs users in through Keycloak and returns tokens", async () => {
-    const keycloakAuth = {
-      register: vi.fn(),
-      login: vi.fn().mockResolvedValue({
-        access_token: "access-token",
-        expires_in: 300,
-        refresh_token: "refresh-token",
-        token_type: "Bearer"
-      })
-    };
+    const keycloakAuth = mockKeycloakAuth();
+    keycloakAuth.login.mockResolvedValue({
+      access_token: "access-token",
+      expires_in: 300,
+      refresh_token: "refresh-token",
+      token_type: "Bearer"
+    });
     const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth(), keycloakAuth, logger: false });
 
     const response = await app.inject({
@@ -128,6 +152,96 @@ describe("app", () => {
     expect(keycloakAuth.login).toHaveBeenCalledWith({
       email: "tester@example.com",
       password: "password123"
+    });
+    await app.close();
+  });
+
+  it("rejects password reset without a bearer token", async () => {
+    const app = await buildApp({ config, prisma: mockPrisma(), logger: false });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/auth/password/reset",
+      payload: { currentPassword: "old-password", newPassword: "new-password" }
+    });
+
+    expect(response.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("resets password for authenticated users", async () => {
+    const passwordReset = mockPasswordReset();
+    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth("user-1"), passwordReset, logger: false });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/auth/password/reset",
+      payload: { currentPassword: "old-password", newPassword: "new-password" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ message: "Password has been reset" });
+    expect(passwordReset.resetPassword).toHaveBeenCalledWith({
+      keycloakId: "kc-1",
+      email: "tester@example.com",
+      currentPassword: "old-password",
+      newPassword: "new-password"
+    });
+    await app.close();
+  });
+
+  it("returns errors when current password verification fails", async () => {
+    const passwordReset = mockPasswordReset();
+    passwordReset.resetPassword.mockRejectedValue(new HttpError(401, "Invalid email or password"));
+    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth("user-1"), passwordReset, logger: false });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/auth/password/reset",
+      payload: { currentPassword: "wrong-password", newPassword: "new-password" }
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ ok: false, error: "Invalid email or password" });
+    await app.close();
+  });
+
+  it("returns generic forgot password request responses", async () => {
+    const passwordReset = mockPasswordReset();
+    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth(), passwordReset, logger: false });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/auth/password/forgot/request",
+      payload: { email: "Tester@Example.com" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ message: "If the email exists, an OTP has been sent" });
+    expect(passwordReset.requestForgotPassword).toHaveBeenCalledWith("tester@example.com");
+    await app.close();
+  });
+
+  it("confirms forgot password OTPs", async () => {
+    const passwordReset = mockPasswordReset();
+    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth(), passwordReset, logger: false });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/auth/password/forgot/confirm",
+      payload: {
+        email: "Tester@Example.com",
+        otp: "123456",
+        newPassword: "new-password"
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ message: "Password has been reset" });
+    expect(passwordReset.confirmForgotPassword).toHaveBeenCalledWith({
+      email: "tester@example.com",
+      otp: "123456",
+      newPassword: "new-password"
     });
     await app.close();
   });
@@ -228,11 +342,23 @@ describe("app", () => {
     const response = await app.inject({ method: "GET", url: "/dashboard?range=7d" });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({
-      avg: 120,
-      min: 80,
-      max: 180,
-      trend: [{ datetime: "2026-05-01T10:00:00.000Z", value: 120 }]
+    expect(response.json()).toMatchObject({
+      range: "7d",
+      widgets: {
+        summary: {
+          status: "ok",
+          data: {
+            avg: 120,
+            min: 120,
+            max: 120,
+            count: 1
+          }
+        },
+        trend: {
+          status: "ok",
+          data: [{ datetime: "2026-05-01T10:00:00.000Z", value: 120 }]
+        }
+      }
     });
     await app.close();
   });

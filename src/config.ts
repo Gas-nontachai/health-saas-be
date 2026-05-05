@@ -14,7 +14,13 @@ const envSchema = z.object({
   KEYCLOAK_ADMIN_PASSWORD: z.string().min(1),
   KEYCLOAK_JWKS_URL: z.string().url(),
   KEYCLOAK_ISSUER: z.string().url().optional(),
-  KEYCLOAK_AUDIENCE: z.string().optional()
+  KEYCLOAK_AUDIENCE: z.string().optional(),
+  SMTP_HOST: z.string().min(1).optional(),
+  SMTP_PORT: z.coerce.number().int().positive().optional(),
+  SMTP_USER: z.string().min(1).optional(),
+  SMTP_PASSWORD: z.string().min(1).optional(),
+  SMTP_FROM: z.string().min(1).optional(),
+  RESET_OTP_SECRET: z.string().min(32).optional()
 });
 
 export type AppConfig = z.infer<typeof envSchema>;
