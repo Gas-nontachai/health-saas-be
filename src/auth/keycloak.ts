@@ -187,7 +187,6 @@ async function updateKeycloakUser(config: AppConfig, adminToken: string, input: 
   const body: Record<string, string> = {};
   if (input.email !== undefined) {
     body.email = input.email;
-    body.username = input.email;
   }
   if (input.firstName !== undefined) body.firstName = input.firstName;
   if (input.lastName !== undefined) body.lastName = input.lastName;
