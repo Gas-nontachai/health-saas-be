@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
+import ExcelJS from "exceljs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AppConfig } from "../src/config.js";
@@ -286,20 +287,91 @@ describe("app", () => {
     await app.close();
   });
 
-  it("rejects invalid blood sugar values", async () => {
-    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth(), logger: false });
+  it("creates records with blood sugar 0 when not measured", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.record.create).mockResolvedValue({
+      id: "record-1",
+      userId: "user-1",
+      datetime: new Date("2026-05-01T10:00:00.000Z"),
+      bloodSugar: 0,
+      medMorning: null,
+      medEvening: null,
+      note: "not measured",
+      createdAt: new Date()
+    });
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
 
     const response = await app.inject({
       method: "POST",
       url: "/records",
       payload: {
         datetime: "2026-05-01T10:00:00.000Z",
-        bloodSugar: 601
+        bloodSugar: 0,
+        note: "not measured"
       }
     });
 
-    expect(response.statusCode).toBe(400);
-    expect(response.json()).toMatchObject({ ok: false });
+    expect(response.statusCode).toBe(201);
+    expect(prisma.record.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ userId: "user-1", bloodSugar: 0, note: "not measured" })
+    });
+    await app.close();
+  });
+
+  it("rejects invalid blood sugar values", async () => {
+    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth(), logger: false });
+
+    for (const bloodSugar of [1, 601]) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/records",
+        payload: {
+          datetime: "2026-05-01T10:00:00.000Z",
+          bloodSugar
+        }
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ ok: false });
+    }
+    await app.close();
+  });
+
+  it("updates records with blood sugar 0 when not measured", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.record.findFirst).mockResolvedValue({
+      id: "11111111-1111-4111-8111-111111111111",
+      userId: "user-1",
+      datetime: new Date("2026-05-01T10:00:00.000Z"),
+      bloodSugar: 120,
+      medMorning: null,
+      medEvening: null,
+      note: null,
+      createdAt: new Date()
+    });
+    vi.mocked(prisma.record.update).mockResolvedValue({
+      id: "11111111-1111-4111-8111-111111111111",
+      userId: "user-1",
+      datetime: new Date("2026-05-01T10:00:00.000Z"),
+      bloodSugar: 0,
+      medMorning: null,
+      medEvening: null,
+      note: null,
+      createdAt: new Date()
+    });
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/records/11111111-1111-4111-8111-111111111111",
+      payload: { bloodSugar: 0 }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(prisma.record.update).toHaveBeenCalledWith({
+      where: { id: "11111111-1111-4111-8111-111111111111" },
+      data: { bloodSugar: 0, datetime: undefined }
+    });
     await app.close();
   });
 
@@ -363,6 +435,82 @@ describe("app", () => {
     await app.close();
   });
 
+  it("excludes blood sugar 0 from dashboard glucose analytics", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.record.findMany).mockResolvedValue([
+      {
+        datetime: new Date("2026-05-01T10:00:00.000Z"),
+        bloodSugar: 0,
+        medMorning: 1,
+        medEvening: null,
+        note: "not measured"
+      },
+      {
+        datetime: new Date("2026-05-02T10:00:00.000Z"),
+        bloodSugar: 120,
+        medMorning: null,
+        medEvening: null,
+        note: null
+      },
+      {
+        datetime: new Date("2026-05-03T10:00:00.000Z"),
+        bloodSugar: 200,
+        medMorning: null,
+        medEvening: null,
+        note: "high"
+      }
+    ] as Awaited<ReturnType<typeof prisma.record.findMany>>);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/dashboard?range=all&widgets=summary,trend,timeInRange,recentAlerts,medAdherence"
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      widgets: {
+        summary: {
+          status: "ok",
+          data: {
+            avg: 160,
+            min: 120,
+            max: 200,
+            count: 2
+          }
+        },
+        trend: {
+          status: "ok",
+          data: [
+            { datetime: "2026-05-02T10:00:00.000Z", value: 120 },
+            { datetime: "2026-05-03T10:00:00.000Z", value: 200 }
+          ]
+        },
+        timeInRange: {
+          status: "ok",
+          data: {
+            total: 2,
+            normal: { count: 1, percent: 50 },
+            high: { count: 1, percent: 50 },
+            low: { count: 0, percent: 0 }
+          }
+        },
+        recentAlerts: {
+          status: "ok",
+          data: [{ datetime: "2026-05-03T10:00:00.000Z", bloodSugar: 200, level: "high", note: "high" }]
+        },
+        medAdherence: {
+          status: "ok",
+          data: {
+            totalDays: 3,
+            morning: { days: 1 }
+          }
+        }
+      }
+    });
+    await app.close();
+  });
+
   it("exports pdf with a 1000 record cap", async () => {
     const prisma = mockPrisma();
     vi.mocked(prisma.record.findMany).mockResolvedValue([]);
@@ -381,20 +529,24 @@ describe("app", () => {
     await app.close();
   });
 
-  it("exports excel workbooks", async () => {
+  it("exports excel workbooks and marks unmeasured records", async () => {
     const prisma = mockPrisma();
     vi.mocked(prisma.record.findMany).mockResolvedValue([
       {
-        id: "record-1",
-        userId: "user-1",
         datetime: new Date("2026-05-01T10:00:00.000Z"),
-        bloodSugar: 120,
+        bloodSugar: 0,
         medMorning: 1,
         medEvening: null,
-        note: "before breakfast",
-        createdAt: new Date()
+        note: "not measured"
+      },
+      {
+        datetime: new Date("2026-05-02T10:00:00.000Z"),
+        bloodSugar: 120,
+        medMorning: null,
+        medEvening: null,
+        note: "before breakfast"
       }
-    ]);
+    ] as Awaited<ReturnType<typeof prisma.record.findMany>>);
     const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
 
     const response = await app.inject({ method: "GET", url: "/export?type=excel" });
@@ -402,6 +554,18 @@ describe("app", () => {
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("spreadsheetml.sheet");
     expect(response.rawPayload.length).toBeGreaterThan(0);
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(response.rawPayload);
+    const summary = workbook.getWorksheet("Summary");
+    const records = workbook.getWorksheet("Records");
+
+    expect(summary?.getCell("B9").value).toBe(2);
+    expect(summary?.getCell("B10").value).toBe(1);
+    expect(summary?.getCell("B11").value).toBe(120);
+    expect(records?.getCell("D2").value).toBe(0);
+    expect(records?.getCell("E2").value).toBe("Not measured");
+    expect(records?.getCell("E3").value).toBe("Normal");
     await app.close();
   });
 });

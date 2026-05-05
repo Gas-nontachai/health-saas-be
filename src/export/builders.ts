@@ -18,7 +18,7 @@ export type ExportContext = {
 };
 
 type RecordStats = {
-  total: number;
+  measuredTotal: number;
   avg: number;
   min: number;
   max: number;
@@ -31,14 +31,20 @@ type RecordStats = {
 const BS_LOW = 70;
 const BS_HIGH = 180;
 
-function classifyBloodSugar(value: number): "Low" | "Normal" | "High" {
+function isMeasuredBloodSugar(record: ExportRecord): boolean {
+  return record.bloodSugar > 0;
+}
+
+function classifyBloodSugar(value: number): "Not measured" | "Low" | "Normal" | "High" {
+  if (value === 0) return "Not measured";
   if (value < BS_LOW) return "Low";
   if (value > BS_HIGH) return "High";
   return "Normal";
 }
 
 function computeStats(records: ExportRecord[]): RecordStats | null {
-  if (records.length === 0) return null;
+  const measuredRecords = records.filter(isMeasuredBloodSugar);
+  if (measuredRecords.length === 0) return null;
   let sum = 0;
   let min = Infinity;
   let max = -Infinity;
@@ -46,7 +52,7 @@ function computeStats(records: ExportRecord[]): RecordStats | null {
   let normalCount = 0;
   let highCount = 0;
 
-  for (const r of records) {
+  for (const r of measuredRecords) {
     sum += r.bloodSugar;
     if (r.bloodSugar < min) min = r.bloodSugar;
     if (r.bloodSugar > max) max = r.bloodSugar;
@@ -57,8 +63,8 @@ function computeStats(records: ExportRecord[]): RecordStats | null {
   }
 
   return {
-    total: records.length,
-    avg: Math.round(sum / records.length),
+    measuredTotal: measuredRecords.length,
+    avg: Math.round(sum / measuredRecords.length),
     min,
     max,
     normalCount,
@@ -108,16 +114,17 @@ export async function buildExcel(records: ExportRecord[], ctx: ExportContext): P
     const statsHeader = summary.addRow(["Statistics"]);
     statsHeader.font = { bold: true, size: 13 };
     summary.addRow(["Date Range", dateRange]);
-    summary.addRow(["Total Records", stats.total]);
+    summary.addRow(["Total Records", records.length]);
+    summary.addRow(["Measured Records", stats.measuredTotal]);
     summary.addRow(["Average (mg/dL)", stats.avg]);
     summary.addRow(["Min (mg/dL)", stats.min]);
     summary.addRow(["Max (mg/dL)", stats.max]);
     summary.addRow([]);
-    summary.addRow(["Normal (70–180 mg/dL)", `${stats.normalCount} (${pct(stats.normalCount, stats.total)})`]);
-    summary.addRow(["Low (< 70 mg/dL)", `${stats.lowCount} (${pct(stats.lowCount, stats.total)})`]);
-    summary.addRow(["High (> 180 mg/dL)", `${stats.highCount} (${pct(stats.highCount, stats.total)})`]);
+    summary.addRow(["Normal (70–180 mg/dL)", `${stats.normalCount} (${pct(stats.normalCount, stats.measuredTotal)})`]);
+    summary.addRow(["Low (< 70 mg/dL)", `${stats.lowCount} (${pct(stats.lowCount, stats.measuredTotal)})`]);
+    summary.addRow(["High (> 180 mg/dL)", `${stats.highCount} (${pct(stats.highCount, stats.measuredTotal)})`]);
   } else {
-    summary.addRow(["No records found."]);
+    summary.addRow([records.length > 0 ? "No measured blood sugar records found." : "No records found."]);
   }
 
   styleLabelColumn(summary);
@@ -130,7 +137,7 @@ export async function buildExcel(records: ExportRecord[], ctx: ExportContext): P
     { header: "Date", key: "date", width: 14 },
     { header: "Time (UTC)", key: "time", width: 12 },
     { header: "Blood Sugar\n(mg/dL)", key: "bloodSugar", width: 14 },
-    { header: "Status", key: "status", width: 10 },
+    { header: "Status", key: "status", width: 14 },
     { header: "Morning Med", key: "medMorning", width: 14 },
     { header: "Evening Med", key: "medEvening", width: 14 },
     { header: "Note", key: "note", width: 36 }
@@ -176,6 +183,8 @@ export async function buildExcel(records: ExportRecord[], ctx: ExportContext): P
       statusCell.font = { bold: true, color: { argb: "FFCC6600" } };
     } else if (status === "High") {
       statusCell.font = { bold: true, color: { argb: "FFCC0000" } };
+    } else if (status === "Not measured") {
+      statusCell.font = { color: { argb: "FF666666" } };
     } else {
       statusCell.font = { color: { argb: "FF007A33" } };
     }
@@ -220,7 +229,7 @@ function pct(count: number, total: number): string {
 //  PDF BUILDER
 // ══════════════════════════════════════════════
 
-const COL_WIDTHS = [28, 70, 55, 72, 52, 64, 64, 110];
+const COL_WIDTHS = [28, 70, 55, 72, 72, 64, 64, 110];
 const TABLE_LEFT = 40;
 const ROW_HEIGHT = 18;
 const HEADER_BG = "#2E5090";
@@ -260,13 +269,13 @@ export function buildPdf(records: ExportRecord[], ctx: ExportContext): Promise<B
       doc.moveDown(0.2);
       doc.fontSize(8).font("Helvetica").fillColor("#333333");
       doc.text(
-        `Period: ${dateRange}  |  Records: ${stats.total}  |  Avg: ${stats.avg} mg/dL  |  Min: ${stats.min} mg/dL  |  Max: ${stats.max} mg/dL`,
+        `Period: ${dateRange}  |  Records: ${records.length}  |  Measured: ${stats.measuredTotal}  |  Avg: ${stats.avg} mg/dL  |  Min: ${stats.min} mg/dL  |  Max: ${stats.max} mg/dL`,
         TABLE_LEFT
       );
       doc.text(
-        `Normal (70–180): ${stats.normalCount} (${pct(stats.normalCount, stats.total)})  |  ` +
-          `Low (<70): ${stats.lowCount} (${pct(stats.lowCount, stats.total)})  |  ` +
-          `High (>180): ${stats.highCount} (${pct(stats.highCount, stats.total)})`,
+        `Normal (70–180): ${stats.normalCount} (${pct(stats.normalCount, stats.measuredTotal)})  |  ` +
+          `Low (<70): ${stats.lowCount} (${pct(stats.lowCount, stats.measuredTotal)})  |  ` +
+          `High (>180): ${stats.highCount} (${pct(stats.highCount, stats.measuredTotal)})`,
         TABLE_LEFT
       );
       doc.moveDown(0.5);
@@ -320,6 +329,7 @@ export function buildPdf(records: ExportRecord[], ctx: ExportContext): Promise<B
         if (c === 4) {
           if (cells[c] === "Low") doc.fillColor("#CC6600");
           else if (cells[c] === "High") doc.fillColor("#CC0000");
+          else if (cells[c] === "Not measured") doc.fillColor("#666666");
           else doc.fillColor("#007A33");
           doc.font("Helvetica-Bold");
         }
