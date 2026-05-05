@@ -2,6 +2,7 @@ import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
+import { resolve } from "node:path";
 
 export type ExportRecord = {
   datetime: Date;
@@ -89,6 +90,7 @@ const PDF_FONT_LATIN_REGULAR_PATH = require.resolve("@fontsource/noto-sans-thai/
 const PDF_FONT_LATIN_BOLD_PATH = require.resolve("@fontsource/noto-sans-thai/files/noto-sans-thai-latin-700-normal.woff");
 const PDF_FONT_REGULAR_PATH = resolvePdfFontPath(
   [
+    resolve(process.cwd(), "assets/fonts/Garuda.ttf"),
     "/usr/share/fonts/truetype/tlwg/Garuda.ttf",
     "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
     "/Library/Fonts/Arial Unicode.ttf"
@@ -97,6 +99,7 @@ const PDF_FONT_REGULAR_PATH = resolvePdfFontPath(
 );
 const PDF_FONT_BOLD_PATH = resolvePdfFontPath(
   [
+    resolve(process.cwd(), "assets/fonts/Garuda-Bold.ttf"),
     "/usr/share/fonts/truetype/tlwg/Garuda-Bold.ttf",
     "/usr/share/fonts/truetype/noto/NotoSansThai-Bold.ttf",
     "/Library/Fonts/Arial Unicode.ttf"
@@ -478,8 +481,11 @@ function drawCenteredFallbackLine(doc: PDFKit.PDFDocument, text: string, y = doc
   const safeText = normalizePdfText(text);
   const runs = splitFontRuns(safeText, false);
   const width = measureRunsWidth(doc, runs);
-  const x = Math.max(TABLE_LEFT, (doc.page.width - width) / 2);
-  drawFallbackText(doc, safeText, x, y, { lineBreak: false });
+  let x = Math.max(TABLE_LEFT, (doc.page.width - width) / 2);
+  for (const run of runs) {
+    doc.font(run.font).text(run.text, x, y, { lineBreak: false });
+    x += doc.widthOfString(run.text);
+  }
   doc.y = y + doc.currentLineHeight(true);
 }
 
