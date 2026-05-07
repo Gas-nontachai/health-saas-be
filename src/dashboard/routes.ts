@@ -45,36 +45,56 @@ type WidgetResult = {
 export async function registerDashboardRoutes(app: FastifyInstance, prisma: AppPrisma): Promise<void> {
   app.get("/dashboard", { preHandler: app.authenticate }, async (request) => {
     const query = dashboardQuerySchema.parse(request.query);
-    const datetimeFilter = getDatetimeFilter(query.range);
+    const requestedWidgets = query.widgets;
+    const needsPeriodComparison = requestedWidgets.includes("periodComparison") && query.range !== "all";
+    const now = new Date();
+    const datetimeFilter = getDatetimeFilter(query.range, 1, now);
 
     const where = {
       userId: request.user.id,
       ...(datetimeFilter ? { datetime: datetimeFilter } : {})
     };
 
-    const [records, profile] = await Promise.all([
+    const recordSelect = {
+      datetime: true,
+      bloodSugar: true,
+      medMorning: true,
+      medEvening: true,
+      note: true
+    } as const;
+
+    const [currentRecords, comparisonRecords, profile] = await Promise.all([
       prisma.record.findMany({
         where,
         orderBy: { datetime: "asc" },
-        select: {
-          datetime: true,
-          bloodSugar: true,
-          medMorning: true,
-          medEvening: true,
-          note: true
-        }
+        select: recordSelect
       }),
+      needsPeriodComparison
+        ? prisma.record.findMany({
+            where: {
+              userId: request.user.id,
+              datetime: getDatetimeFilter(query.range, 2, now)
+            },
+            orderBy: { datetime: "asc" },
+            select: recordSelect
+          })
+        : Promise.resolve([]),
       prisma.profile.findUnique({
         where: { userId: request.user.id },
         select: { weight: true, height: true }
       })
     ]);
 
-    const requestedWidgets = query.widgets;
     const widgets: Record<string, WidgetResult> = {};
 
     for (const key of requestedWidgets) {
-      widgets[key] = buildWidget(key, records, profile, query.range);
+      widgets[key] = buildWidget(
+        key,
+        key === "periodComparison" && query.range !== "all" ? comparisonRecords : currentRecords,
+        profile,
+        query.range,
+        now
+      );
     }
 
     return {
@@ -104,7 +124,7 @@ function isMeasuredBloodSugar(record: RecordRow): boolean {
 
 // ——— Widget builder ———
 
-function buildWidget(key: WidgetKey, records: RecordRow[], profile: ProfileRow, range: string): WidgetResult {
+function buildWidget(key: WidgetKey, records: RecordRow[], profile: ProfileRow, range: string, now: Date): WidgetResult {
   switch (key) {
     case "summary":
       return buildSummary(records);
@@ -129,7 +149,7 @@ function buildWidget(key: WidgetKey, records: RecordRow[], profile: ProfileRow, 
     case "bmi":
       return buildBmi(profile);
     case "periodComparison":
-      return buildPeriodComparison(records, range);
+      return buildPeriodComparison(records, range, now);
   }
 }
 
@@ -483,13 +503,12 @@ function buildBmi(profile: ProfileRow): WidgetResult {
 
 // ——— 12. Period Comparison ———
 
-function buildPeriodComparison(records: RecordRow[], range: string): WidgetResult {
+function buildPeriodComparison(records: RecordRow[], range: string, now: Date): WidgetResult {
   if (range === "all") {
     return { status: "insufficient_data", message: "Period comparison is not available for 'all' range", data: null };
   }
 
   const days = range === "7d" ? 7 : 30;
-  const now = new Date();
   const currentStart = new Date(now);
   currentStart.setUTCDate(currentStart.getUTCDate() - days);
   const previousStart = new Date(currentStart);
@@ -519,12 +538,12 @@ function buildPeriodComparison(records: RecordRow[], range: string): WidgetResul
 
 // ——— Helpers ———
 
-function getDatetimeFilter(range: "7d" | "30d" | "all"): { gte: Date } | undefined {
+function getDatetimeFilter(range: "7d" | "30d" | "all", multiplier = 1, now = new Date()): { gte: Date } | undefined {
   if (range === "all") return undefined;
   const days = range === "7d" ? 7 : 30;
-  // For period comparison, fetch double the range
   const start = new Date();
-  start.setUTCDate(start.getUTCDate() - days * 2);
+  start.setTime(now.getTime());
+  start.setUTCDate(start.getUTCDate() - days * multiplier);
   return { gte: start };
 }
 

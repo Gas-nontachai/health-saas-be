@@ -34,6 +34,7 @@ function mockPrisma(overrides: Partial<AppPrisma> = {}): AppPrisma {
   return {
     record: {
       findMany: vi.fn().mockResolvedValue([]),
+      count: vi.fn().mockResolvedValue(0),
       create: vi.fn(),
       findFirst: vi.fn(),
       update: vi.fn(),
@@ -89,8 +90,22 @@ function getFirstPdfMediaBox(buffer: Buffer): { width: number; height: number } 
   return { width: Number(mediaBox[1]), height: Number(mediaBox[2]) };
 }
 
+function mockRecord(index: number) {
+  return {
+    id: `11111111-1111-4111-8111-${String(index).padStart(12, "0")}`,
+    userId: "user-1",
+    datetime: new Date(Date.UTC(2026, 4, 1, 10, index)),
+    bloodSugar: 100 + index,
+    medMorning: null,
+    medEvening: null,
+    note: null,
+    createdAt: new Date()
+  };
+}
+
 describe("app", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -266,6 +281,59 @@ describe("app", () => {
 
     expect(response.statusCode).toBe(401);
     expect(response.json()).toEqual({ ok: false, error: "Missing bearer token" });
+    await app.close();
+  });
+
+  it("returns records with total count and a next cursor", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.record.findMany).mockResolvedValue(
+      Array.from({ length: 21 }, (_, index) => mockRecord(index + 1)) as Awaited<ReturnType<typeof prisma.record.findMany>>
+    );
+    vi.mocked(prisma.record.count).mockResolvedValue(57);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/records?limit=20" });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.data).toHaveLength(20);
+    expect(body.nextCursor).toBe("11111111-1111-4111-8111-000000000020");
+    expect(body.totalCount).toBe(57);
+    expect(prisma.record.findMany).toHaveBeenCalledWith({
+      where: { userId: "user-1" },
+      orderBy: { datetime: "desc" },
+      take: 21
+    });
+    expect(prisma.record.count).toHaveBeenCalledWith({ where: { userId: "user-1" } });
+    await app.close();
+  });
+
+  it("returns records with total count and no next cursor on the last page", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.record.findMany).mockResolvedValue(
+      Array.from({ length: 3 }, (_, index) => mockRecord(index + 1)) as Awaited<ReturnType<typeof prisma.record.findMany>>
+    );
+    vi.mocked(prisma.record.count).mockResolvedValue(57);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/records?limit=20&cursor=11111111-1111-4111-8111-000000000020"
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.data).toHaveLength(3);
+    expect(body.nextCursor).toBeNull();
+    expect(body.totalCount).toBe(57);
+    expect(prisma.record.findMany).toHaveBeenCalledWith({
+      where: { userId: "user-1" },
+      orderBy: { datetime: "desc" },
+      take: 21,
+      cursor: { id: "11111111-1111-4111-8111-000000000020" },
+      skip: 1
+    });
+    expect(prisma.record.count).toHaveBeenCalledWith({ where: { userId: "user-1" } });
     await app.close();
   });
 
@@ -447,6 +515,110 @@ describe("app", () => {
     await app.close();
   });
 
+  it("uses the selected 30 day range for regular dashboard widgets", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-07T12:00:00.000Z"));
+
+    const prisma = mockPrisma();
+    vi.mocked(prisma.record.findMany)
+      .mockResolvedValueOnce([
+        {
+          datetime: new Date("2026-05-06T10:00:00.000Z"),
+          bloodSugar: 120,
+          medMorning: null,
+          medEvening: null,
+          note: null
+        },
+        {
+          datetime: new Date("2026-05-07T10:00:00.000Z"),
+          bloodSugar: 200,
+          medMorning: null,
+          medEvening: null,
+          note: "high"
+        }
+      ] as Awaited<ReturnType<typeof prisma.record.findMany>>)
+      .mockResolvedValueOnce([
+        {
+          datetime: new Date("2026-03-20T10:00:00.000Z"),
+          bloodSugar: 150,
+          medMorning: null,
+          medEvening: null,
+          note: "previous period"
+        },
+        {
+          datetime: new Date("2026-05-06T10:00:00.000Z"),
+          bloodSugar: 120,
+          medMorning: null,
+          medEvening: null,
+          note: null
+        },
+        {
+          datetime: new Date("2026-05-07T10:00:00.000Z"),
+          bloodSugar: 200,
+          medMorning: null,
+          medEvening: null,
+          note: "high"
+        }
+      ] as Awaited<ReturnType<typeof prisma.record.findMany>>);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/dashboard?range=30d&widgets=summary,trend,timeInRange,recentAlerts,periodComparison"
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      widgets: {
+        summary: {
+          status: "ok",
+          data: { avg: 160, min: 120, max: 200, count: 2 }
+        },
+        trend: {
+          status: "ok",
+          data: [
+            { datetime: "2026-05-06T10:00:00.000Z", value: 120 },
+            { datetime: "2026-05-07T10:00:00.000Z", value: 200 }
+          ]
+        },
+        timeInRange: {
+          status: "ok",
+          data: {
+            total: 2,
+            normal: { count: 1, percent: 50 },
+            high: { count: 1, percent: 50 },
+            low: { count: 0, percent: 0 }
+          }
+        },
+        recentAlerts: {
+          status: "ok",
+          data: [{ datetime: "2026-05-07T10:00:00.000Z", bloodSugar: 200, level: "high", note: "high" }]
+        },
+        periodComparison: {
+          status: "ok",
+          data: {
+            current: { avg: 160, count: 2 },
+            previous: { avg: 150, count: 1 },
+            change: 10
+          }
+        }
+      }
+    });
+    expect(prisma.record.findMany).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        where: { userId: "user-1", datetime: { gte: new Date("2026-04-07T12:00:00.000Z") } }
+      })
+    );
+    expect(prisma.record.findMany).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        where: { userId: "user-1", datetime: { gte: new Date("2026-03-08T12:00:00.000Z") } }
+      })
+    );
+    await app.close();
+  });
+
   it("excludes blood sugar 0 from dashboard glucose analytics", async () => {
     const prisma = mockPrisma();
     vi.mocked(prisma.record.findMany).mockResolvedValue([
@@ -480,6 +652,11 @@ describe("app", () => {
     });
 
     expect(response.statusCode).toBe(200);
+    expect(prisma.record.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId: "user-1" }
+      })
+    );
     expect(response.json()).toMatchObject({
       widgets: {
         summary: {

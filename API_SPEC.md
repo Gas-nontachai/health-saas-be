@@ -390,11 +390,13 @@ Authorization: Bearer <access_token>
       "createdAt": "2026-05-04T10:00:00.000Z"
     }
   ],
-  "nextCursor": "uuid-of-last-record-or-null"
+  "nextCursor": "uuid-of-last-record-or-null",
+  "totalCount": 57
 }
 ```
 
 > `nextCursor` จะเป็น `null` เมื่อไม่มีข้อมูลเพิ่มแล้ว
+> `totalCount` คือจำนวน records ทั้งหมดของ user ปัจจุบัน ไม่ขึ้นกับ `limit` หรือ `cursor`
 
 ---
 
@@ -624,7 +626,7 @@ Authorization: Bearer <access_token>
 | Key | Description | ต้องการข้อมูลขั้นต่ำ |
 |---|---|---|
 | `summary` | สรุป avg / min / max / count | ≥ 1 measured record |
-| `trend` | ข้อมูล line chart (datetime + value) | ≥ 1 measured record |
+| `trend` | ข้อมูล line chart แบบ raw measured records ใน selected range (datetime + value) | ≥ 1 measured record |
 | `timeInRange` | % Time in Range (Low < 70, Normal 70–180, High > 180) | ≥ 1 measured record |
 | `distribution` | Histogram buckets (\<70, 70–100, 101–140, 141–180, 181–250, >250) | ≥ 1 measured record |
 | `dailyPattern` | ค่าเฉลี่ยตามช่วงเวลา (morning/afternoon/evening/night) | ≥ 3 measured records |

@@ -24,20 +24,25 @@ const paginationSchema = z.object({
 export async function registerRecordRoutes(app: FastifyInstance, prisma: AppPrisma): Promise<void> {
   app.get("/records", { preHandler: app.authenticate }, async (request) => {
     const { cursor, limit } = paginationSchema.parse(request.query);
+    const where = { userId: request.user.id };
 
-    const records = await prisma.record.findMany({
-      where: { userId: request.user.id },
-      orderBy: { datetime: "desc" },
-      take: limit + 1,
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {})
-    });
+    const [records, totalCount] = await Promise.all([
+      prisma.record.findMany({
+        where,
+        orderBy: { datetime: "desc" },
+        take: limit + 1,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {})
+      }),
+      prisma.record.count({ where })
+    ]);
 
     const hasMore = records.length > limit;
     if (hasMore) records.pop();
 
     return {
       data: records,
-      nextCursor: hasMore ? records[records.length - 1].id : null
+      nextCursor: hasMore ? records[records.length - 1].id : null,
+      totalCount
     };
   });
 
