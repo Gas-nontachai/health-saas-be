@@ -20,6 +20,15 @@ const WIDGET_KEYS = [
 type WidgetKey = (typeof WIDGET_KEYS)[number];
 
 const DEFAULT_WIDGETS: WidgetKey[] = ["summary", "trend", "timeInRange", "distribution", "dailyPattern", "medAdherence", "recentAlerts"];
+const DEFAULT_PREFERENCE_WIDGETS = normalizeDashboardWidgets(DEFAULT_WIDGETS);
+
+const dashboardPreferenceBodySchema = z.object({
+  widgets: z.array(
+    z.string().refine((key): key is WidgetKey => WIDGET_KEYS.includes(key as WidgetKey), {
+      message: "Unknown dashboard widget key"
+    })
+  )
+});
 
 const dashboardQuerySchema = z.object({
   range: z.enum(["7d", "30d", "all"]).default("30d"),
@@ -43,6 +52,30 @@ type WidgetResult = {
 };
 
 export async function registerDashboardRoutes(app: FastifyInstance, prisma: AppPrisma): Promise<void> {
+  app.get("/dashboard/preferences", { preHandler: app.authenticate }, async (request) => {
+    const preference = await prisma.userPreference.findUnique({
+      where: { userId: request.user.id },
+      select: { dashboardWidgets: true }
+    });
+
+    return {
+      widgets: normalizeStoredDashboardWidgets(preference?.dashboardWidgets)
+    };
+  });
+
+  app.put("/dashboard/preferences", { preHandler: app.authenticate }, async (request) => {
+    const body = dashboardPreferenceBodySchema.parse(request.body);
+    const widgets = normalizeDashboardWidgets(body.widgets);
+
+    await prisma.userPreference.upsert({
+      where: { userId: request.user.id },
+      update: { dashboardWidgets: widgets },
+      create: { userId: request.user.id, dashboardWidgets: widgets }
+    });
+
+    return { widgets };
+  });
+
   app.get("/dashboard", { preHandler: app.authenticate }, async (request) => {
     const query = dashboardQuerySchema.parse(request.query);
     const requestedWidgets = query.widgets;
@@ -104,6 +137,26 @@ export async function registerDashboardRoutes(app: FastifyInstance, prisma: AppP
       widgets
     };
   });
+}
+
+function normalizeStoredDashboardWidgets(value: unknown): WidgetKey[] {
+  if (!Array.isArray(value) || value.some((key) => typeof key !== "string" || !WIDGET_KEYS.includes(key as WidgetKey))) {
+    return DEFAULT_PREFERENCE_WIDGETS;
+  }
+
+  return normalizeDashboardWidgets(value as WidgetKey[]);
+}
+
+function normalizeDashboardWidgets(widgets: readonly WidgetKey[]): WidgetKey[] {
+  const normalized: WidgetKey[] = ["summary"];
+
+  for (const key of widgets) {
+    if (key !== "summary" && !normalized.includes(key)) {
+      normalized.push(key);
+    }
+  }
+
+  return normalized;
 }
 
 // ——— Types ———
