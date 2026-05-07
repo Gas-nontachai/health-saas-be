@@ -750,6 +750,62 @@ Authorization: Bearer <access_token>
 - `"ok"` — ข้อมูลเพียงพอ ใช้งานได้
 - `"insufficient_data"` — ข้อมูลไม่เพียงพอ มี `message` อธิบายเหตุผล, `data` อาจเป็น `null`
 
+#### `GET /dashboard/preferences`
+
+ดึง account-level dashboard widget preference ของ user ปัจจุบัน ใช้สำหรับให้ FE จัดลำดับและเลือกแสดง widget
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Default behavior:** ถ้ายังไม่เคยบันทึก preference จะคืน default widgets ที่ normalize แล้ว
+
+**Pinned summary rule:** backend จะ normalize ให้ `summary` เป็น widget ตัวแรกเสมอ, ตัด key ซ้ำ, และรับประกันว่ามีอย่างน้อย `summary`
+
+**Response** `200 OK`
+
+```json
+{
+  "widgets": ["summary", "trend", "timeInRange", "distribution", "dailyPattern", "medAdherence", "recentAlerts"]
+}
+```
+
+#### `PUT /dashboard/preferences`
+
+บันทึก account-level dashboard widget preference ของ user ปัจจุบัน
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Request Body**
+
+```json
+{
+  "widgets": ["trend", "summary", "timeInRange", "bmi"]
+}
+```
+
+**Validation / Normalization:**
+- ทุก key ใน `widgets` ต้องอยู่ใน Available Widgets
+- unknown widget key จะถูก reject ด้วย `400 Bad Request`
+- duplicate key จะถูกตัด โดยรักษาลำดับแรกที่พบ
+- `summary` จะถูก force เป็นตัวแรกเสมอ
+- ถ้าส่ง `widgets: []` backend จะบันทึกและคืน `["summary"]`
+
+**Response** `200 OK`
+
+```json
+{
+  "widgets": ["summary", "trend", "timeInRange", "bmi"]
+}
+```
+
+**Response** `400 Bad Request`
+
+```json
+{
+  "ok": false,
+  "error": "Unknown dashboard widget key"
+}
+```
+
 **ตัวอย่าง widget ที่ข้อมูลไม่เพียงพอ:**
 
 ```json

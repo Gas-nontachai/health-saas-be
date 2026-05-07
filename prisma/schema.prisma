@@ -8,13 +8,14 @@ datasource db {
 }
 
 model User {
-  id         String    @id @default(uuid())
-  keycloakId String    @unique
+  id         String          @id @default(uuid())
+  keycloakId String          @unique
   email      String
   name       String?
   profile    Profile?
+  preference UserPreference?
   records    Record[]
-  createdAt  DateTime  @default(now())
+  createdAt  DateTime        @default(now())
 }
 
 model Profile {
@@ -38,6 +39,15 @@ model Record {
   createdAt  DateTime @default(now())
 
   @@index([userId, datetime])
+}
+
+model UserPreference {
+  id               String   @id @default(uuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dashboardWidgets Json
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 }
 
 model PasswordResetOtp {

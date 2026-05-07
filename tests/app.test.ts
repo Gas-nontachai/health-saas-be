@@ -49,6 +49,10 @@ function mockPrisma(overrides: Partial<AppPrisma> = {}): AppPrisma {
       upsert: vi.fn(),
       findUnique: vi.fn().mockResolvedValue(null)
     },
+    userPreference: {
+      findUnique: vi.fn().mockResolvedValue(null),
+      upsert: vi.fn()
+    },
     passwordResetOtp: {
       create: vi.fn(),
       findFirst: vi.fn(),
@@ -512,6 +516,88 @@ describe("app", () => {
         }
       }
     });
+    await app.close();
+  });
+
+  it("returns default normalized dashboard preferences when no preference exists", async () => {
+    const prisma = mockPrisma();
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/dashboard/preferences" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      widgets: ["summary", "trend", "timeInRange", "distribution", "dailyPattern", "medAdherence", "recentAlerts"]
+    });
+    expect(prisma.userPreference.findUnique).toHaveBeenCalledWith({
+      where: { userId: "user-1" },
+      select: { dashboardWidgets: true }
+    });
+    await app.close();
+  });
+
+  it("normalizes stored dashboard preferences", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.userPreference.findUnique).mockResolvedValue({
+      dashboardWidgets: ["trend", "summary", "trend", "bmi"]
+    } as Awaited<ReturnType<typeof prisma.userPreference.findUnique>>);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/dashboard/preferences" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ widgets: ["summary", "trend", "bmi"] });
+    await app.close();
+  });
+
+  it("updates dashboard preferences with normalized widget order", async () => {
+    const prisma = mockPrisma();
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/dashboard/preferences",
+      payload: { widgets: ["trend", "summary", "trend", "bmi"] }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ widgets: ["summary", "trend", "bmi"] });
+    expect(prisma.userPreference.upsert).toHaveBeenCalledWith({
+      where: { userId: "user-1" },
+      update: { dashboardWidgets: ["summary", "trend", "bmi"] },
+      create: { userId: "user-1", dashboardWidgets: ["summary", "trend", "bmi"] }
+    });
+    await app.close();
+  });
+
+  it("keeps summary as the only dashboard preference for empty updates", async () => {
+    const prisma = mockPrisma();
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/dashboard/preferences",
+      payload: { widgets: [] }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ widgets: ["summary"] });
+    await app.close();
+  });
+
+  it("rejects unknown dashboard preference widget keys", async () => {
+    const prisma = mockPrisma();
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/dashboard/preferences",
+      payload: { widgets: ["summary", "unknownWidget"] }
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ ok: false });
+    expect(prisma.userPreference.upsert).not.toHaveBeenCalled();
     await app.close();
   });
 
