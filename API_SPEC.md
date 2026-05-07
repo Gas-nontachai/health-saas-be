@@ -390,11 +390,13 @@ Authorization: Bearer <access_token>
       "createdAt": "2026-05-04T10:00:00.000Z"
     }
   ],
-  "nextCursor": "uuid-of-last-record-or-null"
+  "nextCursor": "uuid-of-last-record-or-null",
+  "totalCount": 57
 }
 ```
 
 > `nextCursor` จะเป็น `null` เมื่อไม่มีข้อมูลเพิ่มแล้ว
+> `totalCount` คือจำนวน records ทั้งหมดของ user ปัจจุบัน ไม่ขึ้นกับ `limit` หรือ `cursor`
 
 ---
 

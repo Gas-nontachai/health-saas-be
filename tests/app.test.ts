@@ -34,6 +34,7 @@ function mockPrisma(overrides: Partial<AppPrisma> = {}): AppPrisma {
   return {
     record: {
       findMany: vi.fn().mockResolvedValue([]),
+      count: vi.fn().mockResolvedValue(0),
       create: vi.fn(),
       findFirst: vi.fn(),
       update: vi.fn(),
@@ -87,6 +88,19 @@ function getFirstPdfMediaBox(buffer: Buffer): { width: number; height: number } 
   const mediaBox = text.match(/\/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)\s*\]/);
   if (!mediaBox) throw new Error("PDF MediaBox not found");
   return { width: Number(mediaBox[1]), height: Number(mediaBox[2]) };
+}
+
+function mockRecord(index: number) {
+  return {
+    id: `11111111-1111-4111-8111-${String(index).padStart(12, "0")}`,
+    userId: "user-1",
+    datetime: new Date(Date.UTC(2026, 4, 1, 10, index)),
+    bloodSugar: 100 + index,
+    medMorning: null,
+    medEvening: null,
+    note: null,
+    createdAt: new Date()
+  };
 }
 
 describe("app", () => {
@@ -267,6 +281,59 @@ describe("app", () => {
 
     expect(response.statusCode).toBe(401);
     expect(response.json()).toEqual({ ok: false, error: "Missing bearer token" });
+    await app.close();
+  });
+
+  it("returns records with total count and a next cursor", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.record.findMany).mockResolvedValue(
+      Array.from({ length: 21 }, (_, index) => mockRecord(index + 1)) as Awaited<ReturnType<typeof prisma.record.findMany>>
+    );
+    vi.mocked(prisma.record.count).mockResolvedValue(57);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/records?limit=20" });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.data).toHaveLength(20);
+    expect(body.nextCursor).toBe("11111111-1111-4111-8111-000000000020");
+    expect(body.totalCount).toBe(57);
+    expect(prisma.record.findMany).toHaveBeenCalledWith({
+      where: { userId: "user-1" },
+      orderBy: { datetime: "desc" },
+      take: 21
+    });
+    expect(prisma.record.count).toHaveBeenCalledWith({ where: { userId: "user-1" } });
+    await app.close();
+  });
+
+  it("returns records with total count and no next cursor on the last page", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.record.findMany).mockResolvedValue(
+      Array.from({ length: 3 }, (_, index) => mockRecord(index + 1)) as Awaited<ReturnType<typeof prisma.record.findMany>>
+    );
+    vi.mocked(prisma.record.count).mockResolvedValue(57);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/records?limit=20&cursor=11111111-1111-4111-8111-000000000020"
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.data).toHaveLength(3);
+    expect(body.nextCursor).toBeNull();
+    expect(body.totalCount).toBe(57);
+    expect(prisma.record.findMany).toHaveBeenCalledWith({
+      where: { userId: "user-1" },
+      orderBy: { datetime: "desc" },
+      take: 21,
+      cursor: { id: "11111111-1111-4111-8111-000000000020" },
+      skip: 1
+    });
+    expect(prisma.record.count).toHaveBeenCalledWith({ where: { userId: "user-1" } });
     await app.close();
   });
 
