@@ -58,6 +58,13 @@ function mockPrisma(overrides: Partial<AppPrisma> = {}): AppPrisma {
       findFirst: vi.fn(),
       update: vi.fn()
     },
+    sharedLink: {
+      create: vi.fn(),
+      findMany: vi.fn().mockResolvedValue([]),
+      findFirst: vi.fn(),
+      findUnique: vi.fn(),
+      update: vi.fn()
+    },
     ...overrides
   } as unknown as AppPrisma;
 }
@@ -104,6 +111,22 @@ function mockRecord(index: number) {
     medEvening: null,
     note: null,
     createdAt: new Date()
+  };
+}
+
+function mockSharedLink(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "22222222-2222-4222-8222-222222222222",
+    userId: "user-1",
+    tokenHash: "a".repeat(64),
+    publicToken: "abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-",
+    dataStartAt: new Date("2026-05-01T00:00:00.000Z"),
+    dataEndAt: new Date("2026-05-31T23:59:59.999Z"),
+    expiresAt: new Date("2026-06-07T00:00:00.000Z"),
+    revokedAt: null,
+    createdAt: new Date("2026-05-08T00:00:00.000Z"),
+    updatedAt: new Date("2026-05-08T00:00:00.000Z"),
+    ...overrides
   };
 }
 
@@ -920,6 +943,296 @@ describe("app", () => {
     expect(records?.getCell("H2").value).toBe("วัดไม่ได้ อาหารเย็น");
     expect(records?.getCell("H2").alignment?.wrapText).toBe(true);
     expect(records?.getCell("H2").alignment?.vertical).toBe("top");
+    await app.close();
+  });
+
+  it("creates shared links with a hashed token and returns the one-time token", async () => {
+    vi.setSystemTime(new Date("2026-05-08T00:00:00.000Z"));
+    const prisma = mockPrisma();
+    vi.mocked(prisma.record.count).mockResolvedValue(2);
+    vi.mocked(prisma.sharedLink.create).mockImplementation((async (args: unknown) => {
+      const data = (args as {
+        data: {
+          dataStartAt: Date;
+          dataEndAt: Date;
+          expiresAt: Date;
+          publicToken: string;
+        };
+      }).data;
+      return mockSharedLink({
+        dataStartAt: data.dataStartAt,
+        dataEndAt: data.dataEndAt,
+        expiresAt: data.expiresAt,
+        publicToken: data.publicToken
+      });
+    }) as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/shared-links",
+      payload: {
+        startDate: "2026-05-01T00:00:00.000Z",
+        endDate: "2026-05-31T23:59:59.999Z",
+        expiresInDays: 7
+      }
+    });
+
+    expect(response.statusCode).toBe(201);
+    const body = response.json();
+    expect(body).toMatchObject({
+      id: "22222222-2222-4222-8222-222222222222",
+      dataStartAt: "2026-05-01T00:00:00.000Z",
+      dataEndAt: "2026-05-31T23:59:59.999Z",
+      expiresAt: "2026-05-15T00:00:00.000Z",
+      status: "active"
+    });
+    expect(body.token).toEqual(expect.any(String));
+    expect(body.publicPath).toBe(`/shared/${body.token}`);
+    const createArg = vi.mocked(prisma.sharedLink.create).mock.calls[0][0];
+    const createData = createArg.data as { tokenHash: string; publicToken: string };
+    expect(createData.tokenHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(createData.tokenHash).not.toBe(body.token);
+    expect(createData.publicToken).toBe(body.token);
+    expect(body.revokedAt).toBeNull();
+    await app.close();
+  });
+
+  it("rejects invalid shared link date ranges and expiry days", async () => {
+    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth("user-1"), logger: false });
+
+    const endBeforeStart = await app.inject({
+      method: "POST",
+      url: "/shared-links",
+      payload: {
+        startDate: "2026-05-02T00:00:00.000Z",
+        endDate: "2026-05-01T00:00:00.000Z",
+        expiresInDays: 7
+      }
+    });
+    const tooLong = await app.inject({
+      method: "POST",
+      url: "/shared-links",
+      payload: {
+        startDate: "2026-01-01T00:00:00.000Z",
+        endDate: "2026-05-01T00:00:00.000Z",
+        expiresInDays: 7
+      }
+    });
+    const invalidExpiry = await app.inject({
+      method: "POST",
+      url: "/shared-links",
+      payload: {
+        startDate: "2026-05-01T00:00:00.000Z",
+        endDate: "2026-05-02T00:00:00.000Z",
+        expiresInDays: 14
+      }
+    });
+
+    expect(endBeforeStart.statusCode).toBe(400);
+    expect(tooLong.statusCode).toBe(400);
+    expect(invalidExpiry.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("rejects shared link creation when selected records exceed the limit", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.record.count).mockResolvedValue(1001);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/shared-links",
+      payload: {
+        startDate: "2026-05-01T00:00:00.000Z",
+        endDate: "2026-05-31T23:59:59.999Z",
+        expiresInDays: 7
+      }
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(vi.mocked(prisma.sharedLink.create)).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("lists shared links with active public paths and without raw tokens", async () => {
+    vi.setSystemTime(new Date("2026-05-08T00:00:00.000Z"));
+    const prisma = mockPrisma();
+    vi.mocked(prisma.sharedLink.findMany).mockResolvedValue([
+      mockSharedLink({ id: "active", expiresAt: new Date("2026-05-09T00:00:00.000Z"), publicToken: "active-token" }),
+      mockSharedLink({ id: "legacy", expiresAt: new Date("2026-05-09T00:00:00.000Z"), publicToken: null }),
+      mockSharedLink({ id: "expired", expiresAt: new Date("2026-05-07T00:00:00.000Z"), publicToken: "expired-token" }),
+      mockSharedLink({ id: "revoked", revokedAt: new Date("2026-05-06T00:00:00.000Z"), publicToken: "revoked-token" })
+    ] as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/shared-links" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toEqual([
+      expect.objectContaining({ id: "active", status: "active", publicPath: "/shared/active-token" }),
+      expect.objectContaining({ id: "legacy", status: "active", publicPath: null }),
+      expect.objectContaining({ id: "expired", status: "expired", publicPath: null }),
+      expect.objectContaining({ id: "revoked", status: "revoked", publicPath: null, revokedAt: "2026-05-06T00:00:00.000Z" })
+    ]);
+    expect(response.json().data[0]).not.toHaveProperty("token");
+    expect(response.json().data[0]).not.toHaveProperty("publicToken");
+    await app.close();
+  });
+
+  it("revokes owner shared links and blocks public access immediately", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.sharedLink.findFirst).mockResolvedValue(mockSharedLink() as never);
+    vi.mocked(prisma.sharedLink.update).mockResolvedValue(
+      mockSharedLink({ revokedAt: new Date("2026-05-08T00:00:00.000Z") }) as never
+    );
+    vi.mocked(prisma.sharedLink.findUnique).mockResolvedValue(
+      {
+        ...mockSharedLink({ revokedAt: new Date("2026-05-08T00:00:00.000Z") }),
+        user: { name: "Tester", email: "tester@example.com", profile: null }
+      } as never
+    );
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const revokeResponse = await app.inject({
+      method: "POST",
+      url: "/shared-links/22222222-2222-4222-8222-222222222222/revoke"
+    });
+    const publicResponse = await app.inject({
+      method: "GET",
+      url: "/public/shared-links/abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-"
+    });
+
+    expect(revokeResponse.statusCode).toBe(200);
+    expect(revokeResponse.json()).toMatchObject({ status: "revoked", revokedAt: "2026-05-08T00:00:00.000Z" });
+    expect(publicResponse.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("does not let users revoke shared links they do not own", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.sharedLink.findFirst).mockResolvedValue(null);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-2"), logger: false });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/shared-links/22222222-2222-4222-8222-222222222222/revoke"
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(vi.mocked(prisma.sharedLink.update)).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("returns public shared link payload without authentication", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.sharedLink.findUnique).mockResolvedValue(
+      {
+        ...mockSharedLink({ expiresAt: new Date("2026-06-07T00:00:00.000Z") }),
+        user: {
+          name: "Tester",
+          email: "tester@example.com",
+          profile: { weight: 70, height: 170 }
+        }
+      } as never
+    );
+    vi.mocked(prisma.record.findMany).mockResolvedValue([
+      {
+        datetime: new Date("2026-05-02T10:00:00.000Z"),
+        bloodSugar: 120,
+        medMorning: 1,
+        medEvening: null,
+        note: "before breakfast"
+      }
+    ] as Awaited<ReturnType<typeof prisma.record.findMany>>);
+    vi.mocked(prisma.record.count).mockResolvedValue(1);
+    const app = await buildApp({ config, prisma, logger: false });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/public/shared-links/abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-"
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      patient: {
+        name: "Tester",
+        email: "tester@example.com",
+        weight: 70,
+        height: 170
+      },
+      sharedLink: {
+        dataStartAt: "2026-05-01T00:00:00.000Z",
+        dataEndAt: "2026-05-31T23:59:59.999Z",
+        expiresAt: "2026-06-07T00:00:00.000Z",
+        status: "active"
+      },
+      records: [
+        {
+          datetime: "2026-05-02T10:00:00.000Z",
+          bloodSugar: 120,
+          medMorning: 1,
+          medEvening: null,
+          note: "before breakfast"
+        }
+      ],
+      meta: {
+        totalCount: 1,
+        returnedCount: 1,
+        limit: 1000
+      }
+    });
+    expect(prisma.record.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          userId: "user-1",
+          datetime: {
+            gte: new Date("2026-05-01T00:00:00.000Z"),
+            lte: new Date("2026-05-31T23:59:59.999Z")
+          }
+        },
+        orderBy: { datetime: "asc" },
+        take: 1000
+      })
+    );
+    await app.close();
+  });
+
+  it("returns 404 for unknown, expired, and revoked public shared link tokens", async () => {
+    const prisma = mockPrisma();
+    const app = await buildApp({ config, prisma, logger: false });
+
+    vi.mocked(prisma.sharedLink.findUnique).mockResolvedValueOnce(null);
+    const unknown = await app.inject({
+      method: "GET",
+      url: "/public/shared-links/abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-"
+    });
+
+    vi.mocked(prisma.sharedLink.findUnique).mockResolvedValueOnce(
+      {
+        ...mockSharedLink({ expiresAt: new Date("2026-01-01T00:00:00.000Z") }),
+        user: { name: "Tester", email: "tester@example.com", profile: null }
+      } as never
+    );
+    const expired = await app.inject({
+      method: "GET",
+      url: "/public/shared-links/abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-"
+    });
+
+    vi.mocked(prisma.sharedLink.findUnique).mockResolvedValueOnce(
+      {
+        ...mockSharedLink({ revokedAt: new Date("2026-05-01T00:00:00.000Z") }),
+        user: { name: "Tester", email: "tester@example.com", profile: null }
+      } as never
+    );
+    const revoked = await app.inject({
+      method: "GET",
+      url: "/public/shared-links/abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-"
+    });
+
+    expect(unknown.statusCode).toBe(404);
+    expect(expired.statusCode).toBe(404);
+    expect(revoked.statusCode).toBe(404);
     await app.close();
   });
 });
