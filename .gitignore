@@ -3,5 +3,6 @@ dist
 .env
 .env.dev
 .env.prod
+.env.*
 coverage
 *.log

@@ -14,6 +14,7 @@ import { registerProfileRoutes } from "./profiles/routes.js";
 import type { AppPrisma } from "./prisma.js";
 import { registerRecordRoutes } from "./records/routes.js";
 import { registerErrorHandler } from "./shared/errors.js";
+import { registerSharedLinkRoutes } from "./shared-links/routes.js";
 
 export type BuildAppOptions = {
   config: AppConfig;
@@ -58,6 +59,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await registerProfileRoutes(app, options.prisma, keycloakAuth);
   await registerDashboardRoutes(app, options.prisma);
   await registerExportRoutes(app, options.prisma);
+  await registerSharedLinkRoutes(app, options.prisma);
 
   return app;
 }
