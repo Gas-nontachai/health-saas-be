@@ -12,10 +12,12 @@ services:
 
   keycloak:
     image: quay.io/keycloak/keycloak:24.0
-    command: ${KEYCLOAK_COMMAND:-start-dev}
+    command: ${KEYCLOAK_COMMAND:-start-dev --http-enabled=true --hostname-strict=false}
     environment:
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
       KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
     ports:
       - "${KEYCLOAK_PORT:-8080}:8080"
 

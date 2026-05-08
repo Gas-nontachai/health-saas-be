@@ -15,6 +15,7 @@ model User {
   profile    Profile?
   preference UserPreference?
   records    Record[]
+  sharedLinks SharedLink[]
   createdAt  DateTime        @default(now())
 }
 
@@ -60,5 +61,22 @@ model PasswordResetOtp {
   createdAt  DateTime  @default(now())
 
   @@index([email])
+  @@index([expiresAt])
+}
+
+model SharedLink {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash   String    @unique
+  publicToken String?   @unique
+  dataStartAt DateTime
+  dataEndAt   DateTime
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([userId, createdAt])
   @@index([expiresAt])
 }
