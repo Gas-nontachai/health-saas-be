@@ -20,7 +20,13 @@ const envSchema = z.object({
   SMTP_USER: z.string().min(1).optional(),
   SMTP_PASSWORD: z.string().min(1).optional(),
   SMTP_FROM: z.string().min(1).optional(),
-  RESET_OTP_SECRET: z.string().min(32).optional()
+  RESET_OTP_SECRET: z.string().min(32).optional(),
+  INITIAL_ADMIN_EMAIL: z.string().email().optional(),
+  INITIAL_ADMIN_PASSWORD: z.string().min(8).optional(),
+  RBAC_SYNC_ON_START: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true")
 });
 
 export type AppConfig = z.infer<typeof envSchema>;

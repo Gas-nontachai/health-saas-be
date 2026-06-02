@@ -8,15 +8,65 @@ datasource db {
 }
 
 model User {
-  id         String          @id @default(uuid())
-  keycloakId String          @unique
-  email      String
-  name       String?
-  profile    Profile?
-  preference UserPreference?
-  records    Record[]
+  id          String          @id @default(uuid())
+  keycloakId  String          @unique
+  email       String
+  name        String?
+  profile     Profile?
+  preference  UserPreference?
+  records     Record[]
   sharedLinks SharedLink[]
-  createdAt  DateTime        @default(now())
+  roles       UserRole[]
+  createdAt   DateTime        @default(now())
+}
+
+model Role {
+  id          String           @id @default(uuid())
+  name        String           @unique
+  description String?
+  isSystem    Boolean          @default(false)
+  isActive    Boolean          @default(true)
+  permissions RolePermission[]
+  users       UserRole[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+}
+
+model Permission {
+  id            String           @id @default(uuid())
+  code          String           @unique
+  category      String
+  categoryLabel String
+  action        String
+  scope         String
+  label         String
+  roles         RolePermission[]
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([category])
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+}
+
+model UserRole {
+  userId    String
+  roleId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([userId, roleId])
+  @@index([roleId])
 }
 
 model Profile {

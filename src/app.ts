@@ -8,10 +8,12 @@ import { createKeycloakAuthService, type KeycloakAuthService } from "./auth/keyc
 import { createSmtpMailer, type Mailer } from "./auth/mailer.js";
 import { createPasswordResetService, type PasswordResetService } from "./auth/password-reset.js";
 import { registerAuthRoutes } from "./auth/routes.js";
+import { registerBackofficeRoutes } from "./backoffice/routes.js";
 import { registerDashboardRoutes } from "./dashboard/routes.js";
 import { registerExportRoutes } from "./export/routes.js";
 import { registerProfileRoutes } from "./profiles/routes.js";
 import type { AppPrisma } from "./prisma.js";
+import { syncPermissions as syncPermissionCatalog } from "./rbac/sync.js";
 import { registerRecordRoutes } from "./records/routes.js";
 import { registerErrorHandler } from "./shared/errors.js";
 import { registerSharedLinkRoutes } from "./shared-links/routes.js";
@@ -23,6 +25,8 @@ export type BuildAppOptions = {
   keycloakAuth?: KeycloakAuthService;
   mailer?: Mailer;
   passwordReset?: PasswordResetService;
+  syncPermissions?: (prisma: AppPrisma) => Promise<unknown>;
+  syncPermissionsOnStart?: boolean;
   logger?: boolean;
 };
 
@@ -48,6 +52,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   const keycloakAuth = options.keycloakAuth ?? createKeycloakAuthService(options.config);
   const mailer = options.mailer ?? createSmtpMailer(options.config);
   const passwordReset = options.passwordReset ?? createPasswordResetService(options.config, options.prisma, keycloakAuth, mailer);
+  const shouldSyncPermissions = options.syncPermissionsOnStart ?? options.config.RBAC_SYNC_ON_START;
+
+  if (shouldSyncPermissions) {
+    await (options.syncPermissions ?? syncPermissionCatalog)(options.prisma);
+  }
 
   app.get("/health", async () => ({
     status: "ok",
@@ -60,6 +69,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await registerDashboardRoutes(app, options.prisma);
   await registerExportRoutes(app, options.prisma);
   await registerSharedLinkRoutes(app, options.prisma);
+  await registerBackofficeRoutes(app, options.prisma, keycloakAuth);
 
   return app;
 }

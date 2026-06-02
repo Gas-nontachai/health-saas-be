@@ -15,6 +15,7 @@ Authorization: Bearer <access_token>
 - Backend verify token ผ่าน Keycloak JWKS endpoint โดยอัตโนมัติ
 - เมื่อ token ถูกต้อง ระบบจะ **upsert user** ในฐานข้อมูลจาก token payload (`sub`, `email`, `name`)
 - ครั้งแรกที่ยิง API ด้วย token ใหม่ ระบบจะสร้าง user + profile ให้เอง
+- ระบบจะโหลด `roles` และ `permissions` จาก App DB เพื่อให้ FE ใช้ซ่อน/โชว์เมนู และ backend ใช้ enforce ทุก protected endpoint
 - หาก token ไม่ถูกต้อง/หมดอายุ จะได้ response `401`
 
 ### FE Integration Flow (สรุป)
@@ -61,6 +62,7 @@ Authorization: Bearer <access_token>
 |---|---|
 | `400` | Validation error (Zod) หรือ Bad request |
 | `401` | Missing / Invalid bearer token |
+| `403` | Permission denied |
 | `404` | Resource not found |
 | `409` | Conflict (e.g. user already exists) |
 | `429` | Rate limit exceeded |
@@ -196,9 +198,18 @@ Authorization: Bearer <access_token>
   "id": "uuid",
   "keycloakId": "keycloak-uuid",
   "email": "user@example.com",
-  "name": "สมชาย"
+  "name": "สมชาย",
+  "roles": ["User"],
+  "permissions": [
+    "auth.read.self",
+    "profile.read.self",
+    "records.read.self",
+    "weights.read.self"
+  ]
 }
 ```
+
+FE should treat these permissions as UX hints only. Backend guards remain the source of truth for authorization.
 
 ---
 
@@ -1026,6 +1037,232 @@ Public endpoint สำหรับหน้า `/shared/{token}` ไม่ต้
 
 ---
 
+### 8. Backoffice RBAC
+
+ทุก endpoint ในหมวดนี้ต้อง authentication และต้องมี permission ที่ระบุไว้ ถ้าไม่มีสิทธิ์จะได้ `403 Permission denied`.
+
+#### `GET /backoffice/permissions`
+
+ดึง fixed permission catalog สำหรับหน้า role management
+
+**Required permission:** `roles.read.system`
+
+**Response** `200 OK`
+
+```json
+{
+  "data": [
+    {
+      "code": "records.read.self",
+      "category": "records",
+      "categoryLabel": "Records",
+      "action": "read",
+      "scope": "self",
+      "label": "View own records"
+    },
+    {
+      "code": "weights.read.self",
+      "category": "weights",
+      "categoryLabel": "Weight Tracking",
+      "action": "read",
+      "scope": "self",
+      "label": "View own weight entries"
+    }
+  ]
+}
+```
+
+#### `GET /backoffice/roles`
+
+ดึง role ทั้งหมดพร้อม permissions
+
+**Required permission:** `roles.read.system`
+
+**Response** `200 OK`
+
+```json
+{
+  "data": [
+    {
+      "id": "uuid",
+      "name": "Admin",
+      "description": "System administrator",
+      "isSystem": true,
+      "isActive": true,
+      "permissions": [
+        {
+          "id": "uuid",
+          "code": "roles.update.system",
+          "category": "roles",
+          "categoryLabel": "Roles",
+          "action": "update",
+          "scope": "system",
+          "label": "Update roles"
+        }
+      ],
+      "createdAt": "2026-06-02T00:00:00.000Z",
+      "updatedAt": "2026-06-02T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+#### `POST /backoffice/roles`
+
+สร้าง role ใหม่และเลือก permission ให้ role
+
+**Required permission:** `roles.create.system`
+
+**Request Body:**
+
+| Field | Type | Required | Validation |
+|---|---|---|---|
+| `name` | `string` | ✅ | min 1, max 100 |
+| `description` | `string \| null` | ❌ | max 500 |
+| `isActive` | `boolean` | ❌ | default `true` |
+| `permissions` | `string[]` | ❌ | ต้องเป็น permission code ที่มีใน catalog |
+
+**Request Body Example:**
+
+```json
+{
+  "name": "Care Team",
+  "description": "Can view patient records",
+  "isActive": true,
+  "permissions": ["records.read.any", "profile.read.any"]
+}
+```
+
+**Response** `201 Created`
+
+คืน role object รูปแบบเดียวกับ `GET /backoffice/roles/:id`
+
+#### `GET /backoffice/roles/:id`
+
+ดู role รายตัว
+
+**Required permission:** `roles.read.system`
+
+**Response** `200 OK`
+
+คืน role object พร้อม permissions
+
+#### `PUT /backoffice/roles/:id`
+
+แก้ไข role และ permission ของ role
+
+**Required permission:** `roles.update.system`
+
+**Request Body:**
+
+| Field | Type | Required | Validation |
+|---|---|---|---|
+| `name` | `string` | ❌ | min 1, max 100 |
+| `description` | `string \| null` | ❌ | max 500 |
+| `isActive` | `boolean` | ❌ | system `Admin` ห้าม deactivate |
+| `permissions` | `string[]` | ❌ | replace permission ทั้งชุดของ role |
+
+**Rules:**
+- system role เปลี่ยนชื่อไม่ได้
+- `Admin` role ต้องคง `roles.update.system` และ `users.assignRoles.system`
+
+#### `DELETE /backoffice/roles/:id`
+
+ลบ role
+
+**Required permission:** `roles.delete.system`
+
+**Response** `204 No Content`
+
+**Rules:**
+- system roles เช่น `Admin`, `User` ลบไม่ได้
+
+#### `GET /backoffice/users`
+
+ดึง users สำหรับหน้า user management
+
+**Required permission:** `users.read.system`
+
+**Query Params:**
+
+| Field | Type | Required | Validation |
+|---|---|---|---|
+| `q` | `string` | ❌ | search email/name, min 1, max 100 |
+| `limit` | `number` | ❌ | min 1, max 100, default 50 |
+
+**Response** `200 OK`
+
+```json
+{
+  "data": [
+    {
+      "id": "uuid",
+      "keycloakId": "keycloak-uuid",
+      "email": "user@example.com",
+      "name": "สมชาย",
+      "profile": {
+        "id": "uuid",
+        "userId": "uuid",
+        "weight": 70,
+        "height": 170,
+        "createdAt": "2026-06-02T00:00:00.000Z"
+      },
+      "roles": [],
+      "permissions": [],
+      "createdAt": "2026-06-02T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+#### `GET /backoffice/users/:id`
+
+ดู user รายตัวพร้อม profile, roles, permissions
+
+**Required permission:** `users.read.system`
+
+**Response** `200 OK`
+
+คืน user object รูปแบบเดียวกับ `GET /backoffice/users`
+
+#### `PUT /backoffice/users/:id/profile`
+
+แก้ profile/email/name ของ user อื่นจาก backoffice
+
+**Required permission:** `users.update.system`
+
+**Request Body:**
+
+| Field | Type | Required | Validation |
+|---|---|---|---|
+| `firstName` | `string` | ❌ | min 1, max 100 |
+| `lastName` | `string` | ❌ | min 1, max 100 |
+| `email` | `string` | ❌ | valid email |
+| `weight` | `number \| null` | ❌ | positive |
+| `height` | `number \| null` | ❌ | positive |
+
+ถ้าแก้ `firstName`, `lastName`, หรือ `email` backend จะ sync ไป Keycloak ด้วย
+
+#### `PUT /backoffice/users/:id/roles`
+
+replace roles ของ user
+
+**Required permission:** `users.assignRoles.system`
+
+**Request Body:**
+
+```json
+{
+  "roleIds": ["uuid"]
+}
+```
+
+**Rules:**
+- `roleIds` ทุกตัวต้องมีอยู่จริง
+- ห้าม remove `Admin` role จาก admin คนสุดท้าย
+
+---
+
 ## Data Models (Prisma)
 
 ### User
@@ -1093,3 +1330,51 @@ Public endpoint สำหรับหน้า `/shared/{token}` ไม่ต้
 | `updatedAt` | `DateTime` | วันที่แก้ไขล่าสุด |
 
 > Index: unique `(tokenHash)`, unique `(publicToken)`, `(userId, createdAt)`, `(expiresAt)` บน SharedLink table
+
+### Role
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `String (UUID)` | Primary key |
+| `name` | `String` | ชื่อ role (unique) |
+| `description` | `String?` | คำอธิบาย role |
+| `isSystem` | `Boolean` | system role เช่น `Admin`, `User` |
+| `isActive` | `Boolean` | inactive role จะไม่ให้ permission |
+| `createdAt` | `DateTime` | วันที่สร้าง |
+| `updatedAt` | `DateTime` | วันที่แก้ไขล่าสุด |
+
+### Permission
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `String (UUID)` | Primary key |
+| `code` | `String` | permission code จาก fixed catalog เช่น `records.read.self` (unique) |
+| `category` | `String` | กลุ่ม feature เช่น `records`, `weights` |
+| `categoryLabel` | `String` | label สำหรับแสดงใน backoffice |
+| `action` | `String` | action เช่น `read`, `create`, `update`, `delete` |
+| `scope` | `String` | scope เช่น `self`, `any`, `system` |
+| `label` | `String` | คำอธิบาย permission |
+| `createdAt` | `DateTime` | วันที่สร้าง |
+| `updatedAt` | `DateTime` | วันที่แก้ไขล่าสุด |
+
+> Index: unique `(code)`, `(category)` บน Permission table
+
+### RolePermission
+
+| Field | Type | Description |
+|---|---|---|
+| `roleId` | `String` | FK → Role (cascade delete) |
+| `permissionId` | `String` | FK → Permission (cascade delete) |
+| `createdAt` | `DateTime` | วันที่ assign permission |
+
+> Primary key: `(roleId, permissionId)`
+
+### UserRole
+
+| Field | Type | Description |
+|---|---|---|
+| `userId` | `String` | FK → User (cascade delete) |
+| `roleId` | `String` | FK → Role (cascade delete) |
+| `createdAt` | `DateTime` | วันที่ assign role |
+
+> Primary key: `(userId, roleId)`

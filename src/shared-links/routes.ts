@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { AppPrisma } from "../prisma.js";
+import { requirePermission } from "../rbac/authorize.js";
 import { HttpError } from "../shared/errors.js";
 import { idParamsSchema, isoDatetimeSchema } from "../shared/validation.js";
 
@@ -58,7 +59,7 @@ type SharedLinkRow = {
 };
 
 export async function registerSharedLinkRoutes(app: FastifyInstance, prisma: AppPrisma): Promise<void> {
-  app.post("/shared-links", { preHandler: app.authenticate }, async (request, reply) => {
+  app.post("/shared-links", { preHandler: [app.authenticate, requirePermission("sharedLinks.create.self")] }, async (request, reply) => {
     const body = createSharedLinkSchema.parse(request.body);
     const where = {
       userId: request.user.id,
@@ -96,7 +97,7 @@ export async function registerSharedLinkRoutes(app: FastifyInstance, prisma: App
     };
   });
 
-  app.get("/shared-links", { preHandler: app.authenticate }, async (request) => {
+  app.get("/shared-links", { preHandler: [app.authenticate, requirePermission("sharedLinks.read.self")] }, async (request) => {
     const now = new Date();
     const sharedLinks = await prisma.sharedLink.findMany({
       where: { userId: request.user.id },
@@ -109,7 +110,7 @@ export async function registerSharedLinkRoutes(app: FastifyInstance, prisma: App
     };
   });
 
-  app.post("/shared-links/:id/revoke", { preHandler: app.authenticate }, async (request) => {
+  app.post("/shared-links/:id/revoke", { preHandler: [app.authenticate, requirePermission("sharedLinks.revoke.self")] }, async (request) => {
     const params = idParamsSchema.parse(request.params);
     const existing = await prisma.sharedLink.findFirst({
       where: { id: params.id, userId: request.user.id },

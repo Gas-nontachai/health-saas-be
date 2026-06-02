@@ -7,6 +7,8 @@ declare module "fastify" {
       keycloakId: string;
       email: string;
       name?: string | null;
+      roles: string[];
+      permissions: string[];
     };
   }
 

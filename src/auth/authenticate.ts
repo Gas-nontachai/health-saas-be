@@ -2,6 +2,8 @@ import type { FastifyReply, FastifyRequest, preHandlerHookHandler } from "fastif
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 import type { AppConfig } from "../config.js";
 import type { AppPrisma } from "../prisma.js";
+import { getUserRolePermissions } from "../rbac/authorize.js";
+import { assignDefaultUserRole, bootstrapInitialAdmin } from "../rbac/sync.js";
 import { HttpError } from "../shared/errors.js";
 
 type KeycloakPayload = JWTPayload & {
@@ -52,11 +54,17 @@ export function createAuthenticate(config: AppConfig, prisma: AppPrisma): preHan
       }
     });
 
+    await assignDefaultUserRole(prisma, user.id);
+    await bootstrapInitialAdmin(prisma, user.id, user.email, config.INITIAL_ADMIN_EMAIL);
+    const { roles, permissions } = await getUserRolePermissions(prisma, user.id);
+
     request.user = {
       id: user.id,
       keycloakId: user.keycloakId,
       email: user.email,
-      name: user.name
+      name: user.name,
+      roles,
+      permissions
     };
   };
 }

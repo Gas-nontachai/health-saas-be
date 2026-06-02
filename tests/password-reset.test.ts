@@ -13,7 +13,8 @@ const config: AppConfig = {
   KEYCLOAK_ADMIN_USERNAME: "admin",
   KEYCLOAK_ADMIN_PASSWORD: "admin",
   KEYCLOAK_JWKS_URL: "http://localhost:8080/realms/blood-sugar/protocol/openid-connect/certs",
-  RESET_OTP_SECRET: "test-reset-otp-secret-that-is-long-enough"
+  RESET_OTP_SECRET: "test-reset-otp-secret-that-is-long-enough",
+  RBAC_SYNC_ON_START: false
 };
 
 function mockPrisma(): AppPrisma {

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { AppConfig } from "../src/config.js";
 import type { AppPrisma } from "../src/prisma.js";
+import { PERMISSION_CODES } from "../src/rbac/permissions.js";
 import { HttpError } from "../src/shared/errors.js";
 
 const config: AppConfig = {
@@ -16,16 +17,19 @@ const config: AppConfig = {
   KEYCLOAK_ADMIN_USERNAME: "admin",
   KEYCLOAK_ADMIN_PASSWORD: "admin",
   KEYCLOAK_JWKS_URL: "http://localhost:8080/realms/blood-sugar/protocol/openid-connect/certs",
-  RESET_OTP_SECRET: "test-reset-otp-secret-that-is-long-enough"
+  RESET_OTP_SECRET: "test-reset-otp-secret-that-is-long-enough",
+  RBAC_SYNC_ON_START: false
 };
 
-function mockAuth(userId = "user-1") {
+function mockAuth(userId = "user-1", permissions: string[] = [...PERMISSION_CODES]) {
   return async (request: FastifyRequest, _reply: FastifyReply) => {
     request.user = {
       id: userId,
       keycloakId: "kc-1",
       email: "tester@example.com",
-      name: "Tester"
+      name: "Tester",
+      roles: ["Admin"],
+      permissions
     };
   };
 }
@@ -143,6 +147,21 @@ describe("app", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ status: "ok" });
+    await app.close();
+  });
+
+  it("syncs the RBAC catalog on app start when enabled", async () => {
+    const prisma = mockPrisma();
+    const syncPermissions = vi.fn().mockResolvedValue(undefined);
+    const app = await buildApp({
+      config: { ...config, RBAC_SYNC_ON_START: true },
+      prisma,
+      authenticate: mockAuth(),
+      syncPermissions,
+      logger: false
+    });
+
+    expect(syncPermissions).toHaveBeenCalledWith(prisma);
     await app.close();
   });
 
@@ -1233,6 +1252,192 @@ describe("app", () => {
     expect(unknown.statusCode).toBe(404);
     expect(expired.statusCode).toBe(404);
     expect(revoked.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("returns roles and permissions from auth me", async () => {
+    const app = await buildApp({
+      config,
+      prisma: mockPrisma(),
+      authenticate: mockAuth("user-1", ["auth.read.self", "weights.read.self"]),
+      logger: false
+    });
+
+    const response = await app.inject({ method: "GET", url: "/auth/me" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      roles: ["Admin"],
+      permissions: ["auth.read.self", "weights.read.self"]
+    });
+    await app.close();
+  });
+
+  it("returns 403 when authenticated users lack route permission", async () => {
+    const app = await buildApp({
+      config,
+      prisma: mockPrisma(),
+      authenticate: mockAuth("user-1", []),
+      logger: false
+    });
+
+    const response = await app.inject({ method: "GET", url: "/records" });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ ok: false, error: "Permission denied: records.read.self" });
+    await app.close();
+  });
+
+  it("lists permission catalog for role management", async () => {
+    const app = await buildApp({
+      config,
+      prisma: mockPrisma(),
+      authenticate: mockAuth("user-1", ["roles.read.system"]),
+      logger: false
+    });
+
+    const response = await app.inject({ method: "GET", url: "/backoffice/permissions" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "weights.read.self",
+          category: "weights",
+          categoryLabel: "Weight Tracking"
+        })
+      ])
+    );
+    await app.close();
+  });
+
+  it("creates roles with selected permissions", async () => {
+    const createdAt = new Date("2026-06-01T00:00:00.000Z");
+    const role = {
+      id: "33333333-3333-4333-8333-333333333333",
+      name: "Care Team",
+      description: "Can view records",
+      isSystem: false,
+      isActive: true,
+      createdAt,
+      updatedAt: createdAt,
+      permissions: [
+        {
+          permission: {
+            id: "permission-1",
+            code: "records.read.any",
+            category: "records",
+            categoryLabel: "Records",
+            action: "read",
+            scope: "any",
+            label: "View any user records",
+            createdAt,
+            updatedAt: createdAt
+          }
+        }
+      ]
+    };
+    const prisma = mockPrisma({
+      role: {
+        create: vi.fn().mockResolvedValue({ id: role.id }),
+        findUniqueOrThrow: vi.fn().mockResolvedValue(role)
+      },
+      permission: {
+        findMany: vi.fn().mockResolvedValue([{ id: "permission-1" }])
+      },
+      rolePermission: {
+        deleteMany: vi.fn(),
+        createMany: vi.fn()
+      }
+    } as unknown as Partial<AppPrisma>);
+    const app = await buildApp({
+      config,
+      prisma,
+      authenticate: mockAuth("user-1", ["roles.create.system"]),
+      logger: false
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/backoffice/roles",
+      payload: {
+        name: "Care Team",
+        description: "Can view records",
+        permissions: ["records.read.any"]
+      }
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({
+      id: role.id,
+      name: "Care Team",
+      permissions: [expect.objectContaining({ code: "records.read.any" })]
+    });
+    expect(prisma.rolePermission.createMany).toHaveBeenCalledWith({
+      data: [{ roleId: role.id, permissionId: "permission-1" }],
+      skipDuplicates: true
+    });
+    await app.close();
+  });
+
+  it("assigns roles to users from backoffice", async () => {
+    const createdAt = new Date("2026-06-01T00:00:00.000Z");
+    const role = {
+      id: "33333333-3333-4333-8333-333333333333",
+      name: "Care Team",
+      description: null,
+      isSystem: false,
+      isActive: true,
+      createdAt,
+      updatedAt: createdAt,
+      permissions: []
+    };
+    const user = {
+      id: "44444444-4444-4444-8444-444444444444",
+      keycloakId: "kc-user",
+      email: "patient@example.com",
+      name: "Patient",
+      createdAt,
+      profile: null,
+      roles: [{ role }]
+    };
+    const prisma = mockPrisma({
+      role: {
+        count: vi.fn().mockResolvedValue(1),
+        findUnique: vi.fn().mockResolvedValue({ id: "admin-role-id" })
+      },
+      userRole: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        count: vi.fn().mockResolvedValue(2),
+        deleteMany: vi.fn(),
+        createMany: vi.fn()
+      },
+      user: {
+        findUniqueOrThrow: vi.fn().mockResolvedValue(user)
+      }
+    } as unknown as Partial<AppPrisma>);
+    const app = await buildApp({
+      config,
+      prisma,
+      authenticate: mockAuth("user-1", ["users.assignRoles.system"]),
+      logger: false
+    });
+
+    const response = await app.inject({
+      method: "PUT",
+      url: `/backoffice/users/${user.id}/roles`,
+      payload: { roleIds: [role.id] }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      id: user.id,
+      roles: [expect.objectContaining({ id: role.id, name: "Care Team" })]
+    });
+    expect(prisma.userRole.createMany).toHaveBeenCalledWith({
+      data: [{ userId: user.id, roleId: role.id }],
+      skipDuplicates: true
+    });
     await app.close();
   });
 });

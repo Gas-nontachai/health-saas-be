@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { AppPrisma } from "../prisma.js";
+import { requirePermission } from "../rbac/authorize.js";
 import { HttpError } from "../shared/errors.js";
 import { bloodSugarSchema, idParamsSchema, isoDatetimeSchema } from "../shared/validation.js";
 
@@ -22,7 +23,7 @@ const paginationSchema = z.object({
 });
 
 export async function registerRecordRoutes(app: FastifyInstance, prisma: AppPrisma): Promise<void> {
-  app.get("/records", { preHandler: app.authenticate }, async (request) => {
+  app.get("/records", { preHandler: [app.authenticate, requirePermission("records.read.self")] }, async (request) => {
     const { cursor, limit } = paginationSchema.parse(request.query);
     const where = { userId: request.user.id };
 
@@ -46,7 +47,7 @@ export async function registerRecordRoutes(app: FastifyInstance, prisma: AppPris
     };
   });
 
-  app.post("/records", { preHandler: app.authenticate }, async (request, reply) => {
+  app.post("/records", { preHandler: [app.authenticate, requirePermission("records.create.self")] }, async (request, reply) => {
     const body = createRecordSchema.parse(request.body);
     const record = await prisma.record.create({
       data: {
@@ -63,7 +64,7 @@ export async function registerRecordRoutes(app: FastifyInstance, prisma: AppPris
     return record;
   });
 
-  app.put("/records/:id", { preHandler: app.authenticate }, async (request) => {
+  app.put("/records/:id", { preHandler: [app.authenticate, requirePermission("records.update.self")] }, async (request) => {
     const params = idParamsSchema.parse(request.params);
     const body = updateRecordSchema.parse(request.body);
 
@@ -78,7 +79,7 @@ export async function registerRecordRoutes(app: FastifyInstance, prisma: AppPris
     });
   });
 
-  app.delete("/records/:id", { preHandler: app.authenticate }, async (request, reply) => {
+  app.delete("/records/:id", { preHandler: [app.authenticate, requirePermission("records.delete.self")] }, async (request, reply) => {
     const params = idParamsSchema.parse(request.params);
     await assertRecordOwnership(prisma, params.id, request.user.id);
     await prisma.record.delete({ where: { id: params.id } });
