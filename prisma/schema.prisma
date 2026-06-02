@@ -154,6 +154,7 @@ model SharedLink {
   publicToken String?   @unique
   dataStartAt DateTime
   dataEndAt   DateTime
+  dataTypes   Json      @default("[\"bloodSugar\"]")
   expiresAt   DateTime
   revokedAt   DateTime?
   createdAt   DateTime  @default(now())

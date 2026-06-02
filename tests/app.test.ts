@@ -36,7 +36,7 @@ function mockAuth(userId = "user-1", permissions: string[] = [...PERMISSION_CODE
 }
 
 function mockPrisma(overrides: Partial<AppPrisma> = {}): AppPrisma {
-  return {
+  const prisma = {
     record: {
       findMany: vi.fn().mockResolvedValue([]),
       count: vi.fn().mockResolvedValue(0),
@@ -62,6 +62,7 @@ function mockPrisma(overrides: Partial<AppPrisma> = {}): AppPrisma {
       findMany: vi.fn().mockResolvedValue([]),
       count: vi.fn().mockResolvedValue(0),
       upsert: vi.fn(),
+      findFirst: vi.fn(),
       deleteMany: vi.fn()
     },
     healthGoal: {
@@ -82,6 +83,10 @@ function mockPrisma(overrides: Partial<AppPrisma> = {}): AppPrisma {
     },
     ...overrides
   } as unknown as AppPrisma;
+  Object.defineProperty(prisma, "$transaction", {
+    value: vi.fn(async (callback: (tx: AppPrisma) => Promise<unknown>) => callback(prisma))
+  });
+  return prisma;
 }
 
 function mockKeycloakAuth() {
@@ -1176,6 +1181,109 @@ describe("app", () => {
     await app.close();
   });
 
+  it("serves canonical health blood sugar entry endpoints", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.record.create).mockResolvedValue({
+      id: "record-1",
+      userId: "user-1",
+      datetime: new Date("2026-06-01T08:00:00.000Z"),
+      bloodSugar: 122,
+      medMorning: 1,
+      medEvening: null,
+      note: null,
+      createdAt: new Date("2026-06-01T08:00:00.000Z")
+    } as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/health/blood-sugar/entries",
+      payload: {
+        datetime: "2026-06-01T08:00:00.000Z",
+        bloodSugar: 122,
+        medMorning: 1
+      }
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({ id: "record-1", bloodSugar: 122 });
+    expect(prisma.record.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ userId: "user-1", bloodSugar: 122 })
+    });
+    await app.close();
+  });
+
+  it("serves canonical health weight forecast endpoint", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.healthGoal.findUnique).mockResolvedValue(mockHealthGoal() as never);
+    vi.mocked(prisma.healthMetricEntry.findMany).mockResolvedValue([
+      mockHealthMetricEntry("2026-06-01", 150, 1),
+      mockHealthMetricEntry("2026-06-02", 149, 2),
+      mockHealthMetricEntry("2026-06-03", 148, 3)
+    ] as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/health/weight/forecast?range=all" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ status: "ahead", metricType: "weight_kg" });
+    await app.close();
+  });
+
+  it("returns unified health dashboard for selected blood sugar and weight data", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.record.findMany).mockResolvedValue([
+      { datetime: new Date("2026-06-01T08:00:00.000Z"), bloodSugar: 120, medMorning: 1, medEvening: null, note: null }
+    ] as never);
+    vi.mocked(prisma.healthGoal.findUnique).mockResolvedValue(mockHealthGoal() as never);
+    vi.mocked(prisma.healthMetricEntry.findMany).mockResolvedValue([
+      mockHealthMetricEntry("2026-06-01", 150, 1),
+      mockHealthMetricEntry("2026-06-02", 149, 2),
+      mockHealthMetricEntry("2026-06-03", 148, 3)
+    ] as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/health/dashboard?range=all&dataTypes=bloodSugar,weight" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      dataTypes: ["bloodSugar", "weight"],
+      summary: {
+        bloodSugar: { status: "ok" },
+        weight: { status: "ok" }
+      },
+      forecast: {
+        weight: { status: "ahead" }
+      }
+    });
+    await app.close();
+  });
+
+  it("exports unified health excel reports with selected blood sugar and weight data", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.record.findMany).mockResolvedValue([
+      { datetime: new Date("2026-06-01T08:00:00.000Z"), bloodSugar: 120, medMorning: 1, medEvening: null, note: null }
+    ] as never);
+    vi.mocked(prisma.healthGoal.findUnique).mockResolvedValue(mockHealthGoal() as never);
+    vi.mocked(prisma.healthMetricEntry.findMany).mockResolvedValue([
+      mockHealthMetricEntry("2026-06-01", 150, 1),
+      mockHealthMetricEntry("2026-06-02", 149, 2),
+      mockHealthMetricEntry("2026-06-03", 148, 3)
+    ] as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/health/export?type=excel&dataTypes=bloodSugar,weight" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-disposition"]).toContain("health-report.xlsx");
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(response.rawPayload);
+    expect(workbook.getWorksheet("Summary")).toBeTruthy();
+    expect(workbook.getWorksheet("Blood Sugar")).toBeTruthy();
+    expect(workbook.getWorksheet("Weight Progress")).toBeTruthy();
+    await app.close();
+  });
+
   it("creates shared links with a hashed token and returns the one-time token", async () => {
     vi.setSystemTime(new Date("2026-05-08T00:00:00.000Z"));
     const prisma = mockPrisma();
@@ -1228,6 +1336,51 @@ describe("app", () => {
     await app.close();
   });
 
+  it("creates shared links with selected health data types", async () => {
+    vi.setSystemTime(new Date("2026-05-08T00:00:00.000Z"));
+    const prisma = mockPrisma();
+    vi.mocked(prisma.record.count).mockResolvedValue(1);
+    vi.mocked(prisma.healthMetricEntry.count).mockResolvedValue(2);
+    vi.mocked(prisma.sharedLink.create).mockImplementation((async (args: unknown) => {
+      const data = (args as {
+        data: {
+          dataStartAt: Date;
+          dataEndAt: Date;
+          expiresAt: Date;
+          publicToken: string;
+          dataTypes: string[];
+        };
+      }).data;
+      return mockSharedLink({
+        dataStartAt: data.dataStartAt,
+        dataEndAt: data.dataEndAt,
+        expiresAt: data.expiresAt,
+        publicToken: data.publicToken,
+        dataTypes: data.dataTypes
+      });
+    }) as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/shared-links",
+      payload: {
+        startDate: "2026-05-01T00:00:00.000Z",
+        endDate: "2026-05-31T23:59:59.999Z",
+        expiresInDays: 7,
+        dataTypes: ["bloodSugar", "weight"]
+      }
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().dataTypes).toEqual(["bloodSugar", "weight"]);
+    expect(((vi.mocked(prisma.sharedLink.create).mock.calls[0][0].data as unknown) as { dataTypes: string[] }).dataTypes).toEqual([
+      "bloodSugar",
+      "weight"
+    ]);
+    await app.close();
+  });
+
   it("rejects invalid shared link date ranges and expiry days", async () => {
     const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth("user-1"), logger: false });
 
@@ -1262,6 +1415,35 @@ describe("app", () => {
     expect(endBeforeStart.statusCode).toBe(400);
     expect(tooLong.statusCode).toBe(400);
     expect(invalidExpiry.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("rejects invalid and empty shared link data type selections", async () => {
+    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth("user-1"), logger: false });
+
+    const invalid = await app.inject({
+      method: "POST",
+      url: "/shared-links",
+      payload: {
+        startDate: "2026-05-01T00:00:00.000Z",
+        endDate: "2026-05-02T00:00:00.000Z",
+        expiresInDays: 7,
+        dataTypes: ["sleep"]
+      }
+    });
+    const empty = await app.inject({
+      method: "POST",
+      url: "/shared-links",
+      payload: {
+        startDate: "2026-05-01T00:00:00.000Z",
+        endDate: "2026-05-02T00:00:00.000Z",
+        expiresInDays: 7,
+        dataTypes: []
+      }
+    });
+
+    expect(invalid.statusCode).toBe(400);
+    expect(empty.statusCode).toBe(400);
     await app.close();
   });
 
@@ -1384,7 +1566,7 @@ describe("app", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({
+    expect(response.json()).toMatchObject({
       patient: {
         name: "Tester",
         email: "tester@example.com",
@@ -1395,7 +1577,8 @@ describe("app", () => {
         dataStartAt: "2026-05-01T00:00:00.000Z",
         dataEndAt: "2026-05-31T23:59:59.999Z",
         expiresAt: "2026-06-07T00:00:00.000Z",
-        status: "active"
+        status: "active",
+        dataTypes: ["bloodSugar"]
       },
       records: [
         {
@@ -1412,6 +1595,8 @@ describe("app", () => {
         limit: 1000
       }
     });
+    expect(response.json().data.bloodSugar.records).toEqual(response.json().records);
+    expect(response.json().data.bloodSugar.summary.status).toBe("ok");
     expect(prisma.record.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
@@ -1425,6 +1610,41 @@ describe("app", () => {
         take: 1000
       })
     );
+    await app.close();
+  });
+
+  it("returns public shared link payload with selected weight data only", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.sharedLink.findUnique).mockResolvedValue(
+      {
+        ...mockSharedLink({ expiresAt: new Date("2026-06-07T00:00:00.000Z"), dataTypes: ["weight"] }),
+        user: {
+          name: "Tester",
+          email: "tester@example.com",
+          profile: { weight: 70, height: 170 }
+        }
+      } as never
+    );
+    vi.mocked(prisma.healthMetricEntry.count).mockResolvedValue(3);
+    vi.mocked(prisma.healthMetricEntry.findMany).mockResolvedValue([
+      mockHealthMetricEntry("2026-06-01", 150, 1),
+      mockHealthMetricEntry("2026-06-02", 149, 2),
+      mockHealthMetricEntry("2026-06-03", 148, 3)
+    ] as never);
+    vi.mocked(prisma.healthGoal.findUnique).mockResolvedValue(mockHealthGoal() as never);
+    const app = await buildApp({ config, prisma, logger: false });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/public/shared-links/abcdefghijklmnopqrstuvwxyzABCDEF0123456789_-"
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().records).toBeUndefined();
+    expect(response.json().sharedLink.dataTypes).toEqual(["weight"]);
+    expect(response.json().data.weight.entries).toHaveLength(3);
+    expect(response.json().data.weight.forecastSummary.status).toBe("ahead");
+    expect(response.json().data.bloodSugar).toBeUndefined();
     await app.close();
   });
 
@@ -1502,7 +1722,9 @@ describe("app", () => {
 
   it("upserts one weight metric entry per date", async () => {
     const prisma = mockPrisma();
-    vi.mocked(prisma.healthMetricEntry.upsert).mockResolvedValue(mockHealthMetricEntry("2026-06-02", 149.2) as never);
+    const entry = mockHealthMetricEntry("2026-06-02", 149.2);
+    vi.mocked(prisma.healthMetricEntry.upsert).mockResolvedValue(entry as never);
+    vi.mocked(prisma.healthMetricEntry.findFirst).mockResolvedValue(entry as never);
     const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
 
     const response = await app.inject({
@@ -1530,6 +1752,70 @@ describe("app", () => {
         create: expect.objectContaining({ userId: "user-1", metricType: "weight_kg", value: 149.2 })
       })
     );
+    expect(prisma.profile.upsert).toHaveBeenCalledWith({
+      where: { userId: "user-1" },
+      update: { weight: 149.2 },
+      create: { userId: "user-1", weight: 149.2 }
+    });
+    await app.close();
+  });
+
+  it("syncs profile weight when upserting canonical weight entries", async () => {
+    const prisma = mockPrisma();
+    const entry = mockHealthMetricEntry("2026-06-02", 149.2);
+    vi.mocked(prisma.healthMetricEntry.upsert).mockResolvedValue(entry as never);
+    vi.mocked(prisma.healthMetricEntry.findFirst).mockResolvedValue(entry as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/health/weight/entries/2026-06-02",
+      payload: { value: 149.2 }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      metricType: "weight_kg",
+      date: "2026-06-02",
+      value: 149.2
+    });
+    expect(prisma.healthMetricEntry.findFirst).toHaveBeenCalledWith({
+      where: { userId: "user-1", metricType: "weight_kg" },
+      orderBy: { date: "desc" }
+    });
+    expect(prisma.profile.upsert).toHaveBeenCalledWith({
+      where: { userId: "user-1" },
+      update: { weight: 149.2 },
+      create: { userId: "user-1", weight: 149.2 }
+    });
+    await app.close();
+  });
+
+  it("keeps profile weight on the latest dated entry when editing older weight entries", async () => {
+    const prisma = mockPrisma();
+    const editedEntry = mockHealthMetricEntry("2026-06-01", 151.4, 1);
+    const latestEntry = mockHealthMetricEntry("2026-06-03", 148.8, 3);
+    vi.mocked(prisma.healthMetricEntry.upsert).mockResolvedValue(editedEntry as never);
+    vi.mocked(prisma.healthMetricEntry.findFirst).mockResolvedValue(latestEntry as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/health/weight/entries/2026-06-01",
+      payload: { value: 151.4 }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      metricType: "weight_kg",
+      date: "2026-06-01",
+      value: 151.4
+    });
+    expect(prisma.profile.upsert).toHaveBeenCalledWith({
+      where: { userId: "user-1" },
+      update: { weight: 148.8 },
+      create: { userId: "user-1", weight: 148.8 }
+    });
     await app.close();
   });
 
