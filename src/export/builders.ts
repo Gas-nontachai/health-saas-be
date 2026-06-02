@@ -3,6 +3,20 @@ import PDFDocument from "pdfkit";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
+import {
+  buildRollingAverageSeries,
+  calculateEta,
+  calculateProgressPercent,
+  calculateTrend,
+  compareWithForecast,
+  formatDate,
+  interpolateForecast,
+  round1,
+  type EtaResult,
+  type GoalRow,
+  type MetricEntryRow,
+  type ProgressStatus
+} from "../health-progress/forecast.js";
 
 export type ExportRecord = {
   datetime: Date;
@@ -29,6 +43,41 @@ type RecordStats = {
   highCount: number;
   lowCount: number;
 };
+
+export type WeightProgressContext = {
+  patientName: string;
+  patientEmail: string;
+  exportedAt: Date;
+};
+
+type WeightProgressSummary =
+  | {
+      status: "insufficient_data" | ProgressStatus;
+      currentValue: number;
+      lowestValue: number;
+      highestValue: number;
+      totalChange: number;
+      trendKgPerWeek: number | null;
+      eta: EtaResult;
+      progressPercent: number | null;
+      forecastValue: number | null;
+      deltaVsForecast: number | null;
+      latestDate: string;
+    }
+  | {
+      status: "insufficient_data";
+      message: string;
+      currentValue: null;
+      lowestValue: null;
+      highestValue: null;
+      totalChange: null;
+      trendKgPerWeek: null;
+      eta: EtaResult;
+      progressPercent: null;
+      forecastValue: null;
+      deltaVsForecast: null;
+      latestDate: null;
+    };
 
 // ————— Blood sugar classification (mg/dL) —————
 const BS_LOW = 70;
@@ -266,6 +315,351 @@ function styleLabelColumn(sheet: ExcelJS.Worksheet): void {
 
 function pct(count: number, total: number): string {
   return total > 0 ? `${Math.round((count / total) * 100)}%` : "0%";
+}
+
+// ══════════════════════════════════════════════
+//  WEIGHT PROGRESS EXPORT BUILDERS
+// ══════════════════════════════════════════════
+
+export async function buildWeightProgressExcel(
+  entries: MetricEntryRow[],
+  goal: GoalRow | null,
+  ctx: WeightProgressContext
+): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Health SaaS";
+  workbook.created = ctx.exportedAt;
+
+  const summary = buildWeightProgressSummary(entries, goal);
+  const rollingAverage = buildRollingAverageSeries(entries);
+
+  const summarySheet = workbook.addWorksheet("Summary");
+  summarySheet.columns = [{ width: 28 }, { width: 34 }];
+  const titleRow = summarySheet.addRow(["Weight Progress Report"]);
+  titleRow.font = { name: EXPORT_FONT_FAMILY, bold: true, size: 16 };
+  summarySheet.mergeCells("A1:B1");
+  summarySheet.addRow([]);
+
+  summarySheet.addRow(["Patient Name", ctx.patientName]);
+  summarySheet.addRow(["Email", ctx.patientEmail]);
+  summarySheet.addRow(["Export Date", formatDatetime(ctx.exportedAt)]);
+  summarySheet.addRow(["Report Period", formatWeightReportPeriod(entries)]);
+  summarySheet.addRow([]);
+
+  const goalHeader = summarySheet.addRow(["Goal"]);
+  goalHeader.font = { name: EXPORT_FONT_FAMILY, bold: true, size: 13 };
+  if (goal) {
+    summarySheet.addRow(["Start", `${formatDate(goal.startDate)} / ${round1(goal.startValue)} kg`]);
+    summarySheet.addRow(["Target", `${formatDate(goal.targetDate)} / ${round1(goal.targetValue)} kg`]);
+    summarySheet.addRow(["Target Change", `${round1(goal.targetValue - goal.startValue)} kg`]);
+  } else {
+    summarySheet.addRow(["Goal Status", "insufficient_data"]);
+  }
+  summarySheet.addRow([]);
+
+  const progressHeader = summarySheet.addRow(["Progress"]);
+  progressHeader.font = { name: EXPORT_FONT_FAMILY, bold: true, size: 13 };
+  summarySheet.addRow(["Forecast Status", summary.status]);
+  if ("message" in summary) {
+    summarySheet.addRow(["Message", summary.message]);
+  }
+  summarySheet.addRow(["Current Weight (kg)", formatNullableNumber(summary.currentValue)]);
+  summarySheet.addRow(["Lowest Weight (kg)", formatNullableNumber(summary.lowestValue)]);
+  summarySheet.addRow(["Highest Weight (kg)", formatNullableNumber(summary.highestValue)]);
+  summarySheet.addRow(["Total Change (kg)", formatNullableNumber(summary.totalChange)]);
+  summarySheet.addRow(["Trend (kg/week)", formatNullableNumber(summary.trendKgPerWeek)]);
+  summarySheet.addRow(["Progress (%)", formatNullableNumber(summary.progressPercent)]);
+  summarySheet.addRow(["ETA", formatEta(summary.eta)]);
+  summarySheet.addRow(["Forecast Value (kg)", formatNullableNumber(summary.forecastValue)]);
+  summarySheet.addRow(["Delta vs Forecast (kg)", formatNullableNumber(summary.deltaVsForecast)]);
+
+  styleLabelColumn(summarySheet);
+
+  const logSheet = workbook.addWorksheet("Weight Log");
+  logSheet.columns = [
+    { header: "#", key: "no", width: 6 },
+    { header: "Date", key: "date", width: 14 },
+    { header: "Weight (kg)", key: "weight", width: 14 },
+    { header: "7-Day Average", key: "rollingAverage", width: 16 },
+    { header: "Forecast (kg)", key: "forecast", width: 16 },
+    { header: "Delta vs Forecast", key: "delta", width: 18 }
+  ];
+
+  styleWeightLogHeader(logSheet);
+
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const forecastValue = goal ? round1(interpolateForecast(goal, entry.date)) : null;
+    const row = logSheet.addRow({
+      no: i + 1,
+      date: formatDate(entry.date),
+      weight: round1(entry.value),
+      rollingAverage: rollingAverage[i].value,
+      forecast: forecastValue ?? "-",
+      delta: forecastValue !== null ? round1(entry.value - forecastValue) : "-"
+    });
+
+    row.font = { name: EXPORT_FONT_FAMILY };
+    row.alignment = { vertical: "middle", wrapText: true };
+    row.getCell("no").alignment = { horizontal: "center" };
+    for (const key of ["weight", "rollingAverage", "forecast", "delta"]) {
+      row.getCell(key).alignment = { horizontal: "center" };
+    }
+
+    if (i % 2 === 1) {
+      row.eachCell((cell) => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF2F6FA" } };
+      });
+    }
+  }
+
+  logSheet.eachRow((row) => {
+    row.eachCell((cell) => {
+      cell.border = {
+        top: { style: "thin", color: { argb: "FFD0D0D0" } },
+        bottom: { style: "thin", color: { argb: "FFD0D0D0" } },
+        left: { style: "thin", color: { argb: "FFD0D0D0" } },
+        right: { style: "thin", color: { argb: "FFD0D0D0" } }
+      };
+    });
+  });
+  logSheet.autoFilter = { from: "A1", to: `F${entries.length + 1}` };
+  logSheet.views = [{ state: "frozen", ySplit: 1 }];
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
+}
+
+export function buildWeightProgressPdf(entries: MetricEntryRow[], goal: GoalRow | null, ctx: WeightProgressContext): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ margin: 40, size: "A4", bufferPages: true });
+    const chunks: Buffer[] = [];
+
+    doc.on("data", (chunk: Buffer) => chunks.push(chunk));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+
+    registerPdfFonts(doc);
+
+    const summary = buildWeightProgressSummary(entries, goal);
+    const rollingAverage = buildRollingAverageSeries(entries);
+
+    doc
+      .fontSize(6.5)
+      .font("Latin")
+      .fillColor("#999999")
+      .text(`Exported: ${formatDatetime(ctx.exportedAt)}`, doc.page.width - 210, 24, {
+        width: 170,
+        align: "right",
+        lineBreak: false
+      });
+
+    doc.y = 64;
+    doc.fontSize(18).font("Latin-Bold").fillColor("#111111").text("Weight Progress Report", 40, doc.y, {
+      width: doc.page.width - 80,
+      align: "center"
+    });
+    doc.moveDown(0.35);
+    doc.fontSize(9).fillColor("#555555");
+    drawCenteredFallbackLine(doc, `Patient: ${ctx.patientName}  |  Email: ${ctx.patientEmail}`);
+    doc.y += 3;
+    drawCenteredFallbackLine(doc, `Period: ${formatWeightReportPeriod(entries)}`);
+    doc.moveDown(0.8);
+
+    drawWeightSummaryBlock(doc, entries, goal, summary);
+
+    if (entries.length === 0) {
+      doc.moveDown(0.8);
+      doc.fontSize(11).font("Latin").fillColor("#000000").text("No weight entries found.");
+      drawWeightPageFooters(doc, ctx);
+      doc.end();
+      return;
+    }
+
+    doc.moveDown(0.8);
+    drawWeightTableHeader(doc);
+
+    for (let i = 0; i < entries.length; i++) {
+      if (doc.y + WEIGHT_PDF_ROW_HEIGHT > doc.page.height - PDF_BOTTOM) {
+        doc.addPage();
+        drawWeightTableHeader(doc);
+      }
+
+      const entry = entries[i];
+      const forecastValue = goal ? round1(interpolateForecast(goal, entry.date)) : null;
+      const cells = [
+        String(i + 1),
+        formatDate(entry.date),
+        String(round1(entry.value)),
+        String(rollingAverage[i].value),
+        forecastValue !== null ? String(forecastValue) : "-",
+        forecastValue !== null ? String(round1(entry.value - forecastValue)) : "-"
+      ];
+
+      const rowTop = doc.y;
+      if (i % 2 === 1) {
+        doc.save().rect(WEIGHT_TABLE_LEFT, rowTop, WEIGHT_PDF_TABLE_WIDTH, WEIGHT_PDF_ROW_HEIGHT).fill("#F2F6FA").restore();
+      }
+
+      let x = WEIGHT_TABLE_LEFT;
+      doc.fontSize(7.5).font("Latin").fillColor("#000000");
+      for (let c = 0; c < cells.length; c++) {
+        doc.text(cells[c], x + 3, rowTop + 6, { width: WEIGHT_PDF_COL_WIDTHS[c] - 6, ellipsis: true, lineBreak: false });
+        x += WEIGHT_PDF_COL_WIDTHS[c];
+      }
+
+      const rowBottom = rowTop + WEIGHT_PDF_ROW_HEIGHT;
+      doc
+        .save()
+        .moveTo(WEIGHT_TABLE_LEFT, rowBottom)
+        .lineTo(WEIGHT_TABLE_LEFT + WEIGHT_PDF_TABLE_WIDTH, rowBottom)
+        .lineWidth(0.3)
+        .strokeColor("#D0D0D0")
+        .stroke()
+        .restore();
+      doc.y = rowBottom;
+    }
+
+    drawWeightPageFooters(doc, ctx);
+    doc.end();
+  });
+}
+
+function buildWeightProgressSummary(entries: MetricEntryRow[], goal: GoalRow | null): WeightProgressSummary {
+  const etaUnavailable: EtaResult = { status: "not_progressing", daysRemaining: null, weeksRemaining: null, estimatedDate: null };
+
+  if (entries.length === 0) {
+    return {
+      status: "insufficient_data",
+      message: "No weight entries found.",
+      currentValue: null,
+      lowestValue: null,
+      highestValue: null,
+      totalChange: null,
+      trendKgPerWeek: null,
+      eta: etaUnavailable,
+      progressPercent: null,
+      forecastValue: null,
+      deltaVsForecast: null,
+      latestDate: null
+    };
+  }
+
+  const latest = entries[entries.length - 1];
+  const trend = calculateTrend(entries);
+  const forecastValue = goal ? interpolateForecast(goal, latest.date) : null;
+  const eta = goal ? calculateEta(goal, latest, trend.kgPerWeek) : etaUnavailable;
+
+  return {
+    status: goal && forecastValue !== null ? compareWithForecast(goal, latest.value, forecastValue) : "insufficient_data",
+    currentValue: round1(latest.value),
+    lowestValue: round1(Math.min(...entries.map((entry) => entry.value))),
+    highestValue: round1(Math.max(...entries.map((entry) => entry.value))),
+    totalChange: round1(latest.value - entries[0].value),
+    trendKgPerWeek: trend.status === "ok" ? round1(trend.kgPerWeek) : null,
+    eta,
+    progressPercent: goal ? calculateProgressPercent(goal, latest.value) : null,
+    forecastValue: forecastValue !== null ? round1(forecastValue) : null,
+    deltaVsForecast: forecastValue !== null ? round1(latest.value - forecastValue) : null,
+    latestDate: formatDate(latest.date)
+  };
+}
+
+function styleWeightLogHeader(sheet: ExcelJS.Worksheet): void {
+  const headerRow = sheet.getRow(1);
+  headerRow.font = { name: EXPORT_FONT_FAMILY, bold: true, color: { argb: "FFFFFFFF" } };
+  headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2E5090" } };
+  headerRow.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+  headerRow.height = 28;
+}
+
+function formatWeightReportPeriod(entries: MetricEntryRow[]): string {
+  if (entries.length === 0) return "-";
+  return `${formatDate(entries[0].date)} - ${formatDate(entries[entries.length - 1].date)}`;
+}
+
+function formatNullableNumber(value: number | null): number | string {
+  return value === null ? "-" : value;
+}
+
+function formatEta(eta: EtaResult): string {
+  if (eta.status !== "ok") return "not_progressing";
+  return `${eta.estimatedDate} (${eta.daysRemaining} days / ${eta.weeksRemaining} weeks)`;
+}
+
+function registerPdfFonts(doc: PDFKit.PDFDocument): void {
+  doc.registerFont("Latin", PDF_FONT_LATIN_REGULAR_PATH);
+  doc.registerFont("Latin-Bold", PDF_FONT_LATIN_BOLD_PATH);
+  doc.registerFont("Thai", PDF_FONT_REGULAR_PATH);
+  doc.registerFont("Thai-Bold", PDF_FONT_BOLD_PATH);
+  doc.registerFont("Emoji", PDF_FONT_EMOJI_PATH);
+  doc.registerFont("Math", PDF_FONT_MATH_PATH);
+  doc.registerFont("Symbols", PDF_FONT_SYMBOLS_PATH);
+  doc.registerFont("Symbols2", PDF_FONT_SYMBOLS_2_PATH);
+}
+
+const WEIGHT_PDF_COL_WIDTHS = [28, 76, 82, 93, 89, 108];
+const WEIGHT_TABLE_LEFT = 60;
+const WEIGHT_PDF_TABLE_WIDTH = WEIGHT_PDF_COL_WIDTHS.reduce((a, b) => a + b, 0);
+const WEIGHT_PDF_HEADER_HEIGHT = 22;
+const WEIGHT_PDF_ROW_HEIGHT = 22;
+
+function drawWeightSummaryBlock(doc: PDFKit.PDFDocument, entries: MetricEntryRow[], goal: GoalRow | null, summary: WeightProgressSummary): void {
+  doc.fillColor("#000000").fontSize(10).font("Latin-Bold").text("Summary", WEIGHT_TABLE_LEFT);
+  doc.moveDown(0.2);
+  doc.fontSize(8).font("Latin").fillColor("#333333");
+
+  if (goal) {
+    doc.text(
+      `Goal: ${formatDate(goal.startDate)} / ${round1(goal.startValue)} kg  ->  ${formatDate(goal.targetDate)} / ${round1(goal.targetValue)} kg`,
+      WEIGHT_TABLE_LEFT
+    );
+  } else {
+    doc.text("Goal: insufficient_data", WEIGHT_TABLE_LEFT);
+  }
+
+  if (entries.length === 0) {
+    doc.text("Progress: No weight entries found.", WEIGHT_TABLE_LEFT);
+    return;
+  }
+
+  doc.text(
+    `Status: ${summary.status}  |  Current: ${summary.currentValue} kg  |  Change: ${summary.totalChange} kg  |  Trend: ${formatNullableNumber(
+      summary.trendKgPerWeek
+    )} kg/week`,
+    WEIGHT_TABLE_LEFT
+  );
+  doc.text(
+    `ETA: ${formatEta(summary.eta)}  |  Progress: ${formatNullableNumber(summary.progressPercent)}%  |  Forecast: ${formatNullableNumber(
+      summary.forecastValue
+    )} kg  |  Delta: ${formatNullableNumber(summary.deltaVsForecast)} kg`,
+    WEIGHT_TABLE_LEFT
+  );
+}
+
+function drawWeightTableHeader(doc: PDFKit.PDFDocument): void {
+  const headers = ["#", "Date", "Weight", "7-Day Avg", "Forecast", "Delta vs Forecast"];
+  doc.save().rect(WEIGHT_TABLE_LEFT, doc.y, WEIGHT_PDF_TABLE_WIDTH, WEIGHT_PDF_HEADER_HEIGHT).fill(HEADER_BG).restore();
+
+  const headerY = doc.y + 5;
+  let x = WEIGHT_TABLE_LEFT;
+  doc.fontSize(7.5).font("Latin-Bold").fillColor("#FFFFFF");
+  for (let c = 0; c < headers.length; c++) {
+    doc.text(headers[c], x + 3, headerY, { width: WEIGHT_PDF_COL_WIDTHS[c] - 6, lineBreak: false });
+    x += WEIGHT_PDF_COL_WIDTHS[c];
+  }
+
+  doc.y = headerY - 5 + WEIGHT_PDF_HEADER_HEIGHT;
+  doc.fillColor("#000000");
+}
+
+function drawWeightPageFooters(doc: PDFKit.PDFDocument, ctx: WeightProgressContext): void {
+  const pageCount = doc.bufferedPageRange().count;
+  for (let i = 0; i < pageCount; i++) {
+    doc.switchToPage(i);
+    doc.fontSize(7).fillColor("#999999");
+    drawCenteredFallbackLine(doc, `Page ${i + 1} of ${pageCount}  -  Weight Progress Report  -  ${ctx.patientName}`, doc.page.height - 55);
+  }
 }
 
 // ══════════════════════════════════════════════

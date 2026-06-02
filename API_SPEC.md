@@ -831,7 +831,311 @@ FE should treat these permissions as UX hints only. Backend guards remain the so
 
 ---
 
-### 6. Export
+### 6. Health Progress Forecast
+
+Progress Forecast เป็น feature หลักสำหรับเทียบ **Forecast vs Actual** ของ health metric โดย MVP รองรับ metric แรกคือ `weight_kg`
+
+> `Profile.weight` ยังใช้สำหรับ BMI/export เดิมเท่านั้น ไม่ใช่ source ของ forecast calculations
+
+#### `PUT /health-progress/metrics/weight/:date`
+
+เพิ่มหรือแก้ไขน้ำหนักรายวัน 1 ค่า ต่อ 1 calendar date
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permission:** `weights.update.self`
+
+**Path Params:**
+
+| Param | Type | Required | Validation |
+|---|---|---|---|
+| `date` | `string` | ✅ | `YYYY-MM-DD` |
+
+**Request Body**
+
+```json
+{
+  "value": 150.2
+}
+```
+
+**Response** `200 OK`
+
+```json
+{
+  "id": "uuid",
+  "metricType": "weight_kg",
+  "date": "2026-06-02",
+  "value": 150.2,
+  "createdAt": "2026-06-02T00:00:00.000Z",
+  "updatedAt": "2026-06-02T00:00:00.000Z"
+}
+```
+
+#### `GET /health-progress/metrics/weight`
+
+ดึง raw weight inputs สำหรับหน้า edit/history
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permission:** `weights.read.self`
+
+**Query Parameters:**
+
+| Param | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `from` | `string` | ❌ | - | `YYYY-MM-DD` |
+| `to` | `string` | ❌ | - | `YYYY-MM-DD` |
+| `cursor` | `string` | ❌ | - | pagination cursor |
+| `limit` | `number` | ❌ | `20` | 1-100 |
+
+**Response** `200 OK`
+
+```json
+{
+  "data": [
+    {
+      "id": "uuid",
+      "metricType": "weight_kg",
+      "date": "2026-06-02",
+      "value": 150.2,
+      "createdAt": "2026-06-02T00:00:00.000Z",
+      "updatedAt": "2026-06-02T00:00:00.000Z"
+    }
+  ],
+  "nextCursor": null,
+  "totalCount": 1
+}
+```
+
+#### `DELETE /health-progress/metrics/weight/:date`
+
+ลบ weight input ของวันที่ระบุ
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permission:** `weights.delete.self`
+
+**Response** `204 No Content`
+
+#### `GET /health-progress/goals/weight`
+
+ดึง active weight goal ปัจจุบันของ user หรือ `null`
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permission:** `weights.read.self`
+
+**Response** `200 OK`
+
+```json
+{
+  "id": "uuid",
+  "metricType": "weight_kg",
+  "startDate": "2026-06-02",
+  "targetDate": "2026-12-31",
+  "startValue": 150,
+  "targetValue": 130,
+  "createdAt": "2026-06-02T00:00:00.000Z",
+  "updatedAt": "2026-06-02T00:00:00.000Z"
+}
+```
+
+#### `PUT /health-progress/goals/weight`
+
+สร้างหรือแทนที่ active weight goal ของ user
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permission:** `weights.update.self`
+
+**Request Body**
+
+```json
+{
+  "startValue": 150,
+  "targetValue": 130,
+  "startDate": "2026-06-02",
+  "targetDate": "2026-12-31"
+}
+```
+
+**Validation:**
+- `targetDate` ต้องอยู่หลัง `startDate`
+- `targetValue` ต้องไม่เท่ากับ `startValue`
+- ทุก date ใช้ format `YYYY-MM-DD`
+
+**Response** `200 OK`
+
+```json
+{
+  "id": "uuid",
+  "metricType": "weight_kg",
+  "startDate": "2026-06-02",
+  "targetDate": "2026-12-31",
+  "startValue": 150,
+  "targetValue": 130,
+  "createdAt": "2026-06-02T00:00:00.000Z",
+  "updatedAt": "2026-06-02T00:00:00.000Z"
+}
+```
+
+#### `GET /health-progress/forecast/weight`
+
+Main dashboard endpoint สำหรับ Forecast vs Actual
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permission:** `weights.read.self`
+
+**Query Parameters:**
+
+| Param | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `range` | `string` | ❌ | `30d` | `30d`, `90d`, `all` |
+
+**Status Rules:**
+- `ahead` — actual ดีกว่า forecast อย่างน้อย `0.5 kg`
+- `on_track` — actual อยู่ในช่วง `±0.5 kg` จาก forecast
+- `behind` — actual แย่กว่า forecast มากกว่า `0.5 kg`
+- `insufficient_data` — ยังไม่มี goal หรือยังไม่มี actual entry
+
+**Response** `200 OK`
+
+```json
+{
+  "range": "30d",
+  "metricType": "weight_kg",
+  "status": "on_track",
+  "goal": {
+    "id": "uuid",
+    "metricType": "weight_kg",
+    "startDate": "2026-06-02",
+    "targetDate": "2026-12-31",
+    "startValue": 150,
+    "targetValue": 130,
+    "createdAt": "2026-06-02T00:00:00.000Z",
+    "updatedAt": "2026-06-02T00:00:00.000Z"
+  },
+  "cards": {
+    "currentValue": 150.2,
+    "lowestValue": 149.8,
+    "highestValue": 151,
+    "totalChange": -0.8,
+    "trendKgPerWeek": -0.7,
+    "eta": {
+      "status": "ok",
+      "daysRemaining": 210,
+      "weeksRemaining": 30,
+      "estimatedDate": "2027-01-15"
+    },
+    "targetProgress": {
+      "percent": 4,
+      "remainingValue": -19.2
+    },
+    "forecastComparison": {
+      "date": "2026-06-10",
+      "forecastValue": 149.3,
+      "delta": 0.9
+    }
+  },
+  "series": {
+    "actual": [
+      { "date": "2026-06-02", "value": 150.2 }
+    ],
+    "rollingAverage": [
+      { "date": "2026-06-02", "value": 150.2 }
+    ],
+    "forecast": [
+      { "date": "2026-06-02", "value": 150 },
+      { "date": "2026-12-31", "value": 130 }
+    ]
+  }
+}
+```
+
+**Insufficient Data Response**
+
+```json
+{
+  "range": "30d",
+  "metricType": "weight_kg",
+  "status": "insufficient_data",
+  "message": "Weight goal is required to calculate forecast",
+  "goal": null,
+  "cards": null,
+  "series": {
+    "actual": [],
+    "rollingAverage": [],
+    "forecast": []
+  }
+}
+```
+
+#### `GET /health-progress/export/weight`
+
+Export Weight Progress Report เป็น Excel หรือ PDF โดยเน้น Forecast vs Actual, trend, ETA, goal progress และ daily weight log
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permissions:** ต้องมีทั้ง `export.read.self` และ `weights.read.self`
+
+**Query Parameters:**
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `type` | `string` | ✅ | `excel`, `pdf` |
+
+**Data Rules:**
+- export weight entries ของ user ปัจจุบัน เฉพาะ `metricType = "weight_kg"`
+- เรียงตาม date ASC
+- จำกัดสูงสุด 1,000 entries
+- ถ้าไม่มี goal จะยัง export raw weight log ได้ แต่ forecast fields เป็น `insufficient_data`
+- ถ้าไม่มี entries จะยังได้ report ที่ valid พร้อมข้อความ `No weight entries found.`
+
+**Response (Excel)** `200 OK`
+
+```
+Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+Content-Disposition: attachment; filename="weight-progress-report.xlsx"
+```
+
+Body: binary Excel file — มี 2 sheets:
+
+**Sheet 1: Summary**
+
+| Row | Description |
+|---|---|
+| Patient Name | ชื่อผู้ใช้ |
+| Email | อีเมล |
+| Export Date | วันที่ export |
+| Report Period | ช่วงวันที่ของ weight entries |
+| Goal | start date/value, target date/value, target change |
+| Progress | status, current/lowest/highest weight, total change, trend, ETA, progress %, forecast comparison |
+
+**Sheet 2: Weight Log**
+
+| Column | Description |
+|---|---|
+| # | ลำดับ |
+| Date | วันที่ (YYYY-MM-DD) |
+| Weight (kg) | น้ำหนักที่บันทึก |
+| 7-Day Average | rolling average จาก entries ที่มี |
+| Forecast (kg) | forecast value ของวันนั้น ถ้ามี goal |
+| Delta vs Forecast | actual - forecast ถ้ามี goal |
+
+**Response (PDF)** `200 OK`
+
+```
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="weight-progress-report.pdf"
+```
+
+Body: binary PDF file (A4 portrait) — มี patient header, goal/progress summary, daily weight table และ page footer
+
+---
+
+### 7. Export
 
 #### `GET /export`
 
@@ -908,7 +1212,7 @@ Body: binary PDF file (A4 landscape) — มี header ข้อมูลผู�
 
 ---
 
-### 7. Shared Links
+### 8. Shared Links
 
 #### `POST /shared-links`
 
@@ -1037,7 +1341,7 @@ Public endpoint สำหรับหน้า `/shared/{token}` ไม่ต้
 
 ---
 
-### 8. Backoffice RBAC
+### 9. Backoffice RBAC
 
 ทุก endpoint ในหมวดนี้ต้อง authentication และต้องมี permission ที่ระบุไว้ ถ้าไม่มีสิทธิ์จะได้ `403 Permission denied`.
 
@@ -1299,6 +1603,36 @@ replace roles ของ user
 | `createdAt` | `DateTime` | วันที่สร้าง |
 
 > Index: `(userId, datetime)` บน Record table
+
+### HealthMetricEntry
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `String (UUID)` | Primary key |
+| `userId` | `String` | FK → User (cascade delete) |
+| `metricType` | `String` | health metric key, MVP ใช้ `weight_kg` |
+| `date` | `DateTime` | calendar date ที่บันทึกแบบ date-only UTC |
+| `value` | `Float` | metric value |
+| `createdAt` | `DateTime` | วันที่สร้าง |
+| `updatedAt` | `DateTime` | วันที่แก้ไขล่าสุด |
+
+> Unique: `(userId, metricType, date)`, Index: `(userId, metricType, date)`
+
+### HealthGoal
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `String (UUID)` | Primary key |
+| `userId` | `String` | FK → User (cascade delete) |
+| `metricType` | `String` | health metric key, MVP ใช้ `weight_kg` |
+| `startDate` | `DateTime` | วันที่เริ่ม forecast plan |
+| `targetDate` | `DateTime` | วันที่เป้าหมาย |
+| `startValue` | `Float` | ค่าเริ่มต้นของ goal |
+| `targetValue` | `Float` | ค่าเป้าหมาย |
+| `createdAt` | `DateTime` | วันที่สร้าง |
+| `updatedAt` | `DateTime` | วันที่แก้ไขล่าสุด |
+
+> Unique: `(userId, metricType)`, Index: `(userId, metricType)`
 
 ### PasswordResetOtp
 

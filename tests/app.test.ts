@@ -58,6 +58,16 @@ function mockPrisma(overrides: Partial<AppPrisma> = {}): AppPrisma {
       findUnique: vi.fn().mockResolvedValue(null),
       upsert: vi.fn()
     },
+    healthMetricEntry: {
+      findMany: vi.fn().mockResolvedValue([]),
+      count: vi.fn().mockResolvedValue(0),
+      upsert: vi.fn(),
+      deleteMany: vi.fn()
+    },
+    healthGoal: {
+      findUnique: vi.fn().mockResolvedValue(null),
+      upsert: vi.fn()
+    },
     passwordResetOtp: {
       create: vi.fn(),
       findFirst: vi.fn(),
@@ -131,6 +141,33 @@ function mockSharedLink(overrides: Record<string, unknown> = {}) {
     revokedAt: null,
     createdAt: new Date("2026-05-08T00:00:00.000Z"),
     updatedAt: new Date("2026-05-08T00:00:00.000Z"),
+    ...overrides
+  };
+}
+
+function mockHealthMetricEntry(date: string, value: number, index = 1) {
+  return {
+    id: `33333333-3333-4333-8333-${String(index).padStart(12, "0")}`,
+    userId: "user-1",
+    metricType: "weight_kg",
+    date: new Date(`${date}T00:00:00.000Z`),
+    value,
+    createdAt: new Date("2026-06-01T00:00:00.000Z"),
+    updatedAt: new Date("2026-06-01T00:00:00.000Z")
+  };
+}
+
+function mockHealthGoal(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "44444444-4444-4444-8444-444444444444",
+    userId: "user-1",
+    metricType: "weight_kg",
+    startDate: new Date("2026-06-01T00:00:00.000Z"),
+    targetDate: new Date("2026-06-30T00:00:00.000Z"),
+    startValue: 150,
+    targetValue: 140,
+    createdAt: new Date("2026-06-01T00:00:00.000Z"),
+    updatedAt: new Date("2026-06-01T00:00:00.000Z"),
     ...overrides
   };
 }
@@ -988,6 +1025,157 @@ describe("app", () => {
     await app.close();
   });
 
+  it("exports weight progress excel reports with summary and log sheets", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.healthGoal.findUnique).mockResolvedValue(mockHealthGoal() as never);
+    vi.mocked(prisma.healthMetricEntry.findMany).mockResolvedValue([
+      mockHealthMetricEntry("2026-06-01", 150, 1),
+      mockHealthMetricEntry("2026-06-02", 149, 2),
+      mockHealthMetricEntry("2026-06-03", 148, 3)
+    ] as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/health-progress/export/weight?type=excel" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("spreadsheetml.sheet");
+    expect(response.headers["content-disposition"]).toContain("weight-progress-report.xlsx");
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(response.rawPayload);
+    const summary = workbook.getWorksheet("Summary");
+    const log = workbook.getWorksheet("Weight Log");
+
+    expect(summary?.getCell("A1").value).toBe("Weight Progress Report");
+    expect(summary?.getCell("B3").value).toBe("Tester");
+    expect(summary?.getCell("B4").value).toBe("tester@example.com");
+    expect(summary?.getCell("B9").value).toBe("2026-06-01 / 150 kg");
+    expect(summary?.getCell("B14").value).toBe("ahead");
+    expect(log?.getCell("B1").value).toBe("Date");
+    expect(log?.getCell("C1").value).toBe("Weight (kg)");
+    expect(log?.getCell("D1").value).toBe("7-Day Average");
+    expect(log?.getCell("E1").value).toBe("Forecast (kg)");
+    expect(log?.getCell("F1").value).toBe("Delta vs Forecast");
+    expect(log?.getCell("B4").value).toBe("2026-06-03");
+    expect(log?.getCell("C4").value).toBe(148);
+    expect(log?.getCell("D4").value).toBe(149);
+    await app.close();
+  });
+
+  it("exports weight progress pdf reports", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.healthGoal.findUnique).mockResolvedValue(mockHealthGoal() as never);
+    vi.mocked(prisma.healthMetricEntry.findMany).mockResolvedValue([
+      mockHealthMetricEntry("2026-06-01", 150, 1),
+      mockHealthMetricEntry("2026-06-02", 149, 2),
+      mockHealthMetricEntry("2026-06-03", 148, 3)
+    ] as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/health-progress/export/weight?type=pdf" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("application/pdf");
+    expect(response.headers["content-disposition"]).toContain("weight-progress-report.pdf");
+    expect(countPdfPages(response.rawPayload)).toBe(1);
+    expect(getFirstPdfMediaBox(response.rawPayload)).toMatchObject({ width: 595.28, height: 841.89 });
+    await app.close();
+  });
+
+  it("exports weight progress reports with entries but no goal", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.healthMetricEntry.findMany).mockResolvedValue([
+      mockHealthMetricEntry("2026-06-01", 150, 1),
+      mockHealthMetricEntry("2026-06-02", 149, 2)
+    ] as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/health-progress/export/weight?type=excel" });
+
+    expect(response.statusCode).toBe(200);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(response.rawPayload);
+    const summary = workbook.getWorksheet("Summary");
+    const log = workbook.getWorksheet("Weight Log");
+
+    expect(summary?.getCell("B9").value).toBe("insufficient_data");
+    expect(summary?.getCell("B12").value).toBe("insufficient_data");
+    expect(log?.getCell("E2").value).toBe("-");
+    expect(log?.getCell("F2").value).toBe("-");
+    await app.close();
+  });
+
+  it("exports empty weight progress reports", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.healthGoal.findUnique).mockResolvedValue(mockHealthGoal() as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/health-progress/export/weight?type=excel" });
+
+    expect(response.statusCode).toBe(200);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(response.rawPayload);
+    const summary = workbook.getWorksheet("Summary");
+    const log = workbook.getWorksheet("Weight Log");
+
+    expect(summary?.getCell("B6").value).toBe("-");
+    expect(summary?.getCell("B14").value).toBe("insufficient_data");
+    expect(summary?.getCell("B15").value).toBe("No weight entries found.");
+    expect(log?.actualRowCount).toBe(1);
+    await app.close();
+  });
+
+  it("exports weight progress with a 1000 entry cap", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.healthMetricEntry.findMany).mockResolvedValue([]);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/health-progress/export/weight?type=pdf" });
+
+    expect(response.statusCode).toBe(200);
+    expect(prisma.healthMetricEntry.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          userId: "user-1",
+          metricType: "weight_kg"
+        },
+        orderBy: { date: "asc" },
+        take: 1000
+      })
+    );
+    await app.close();
+  });
+
+  it("requires export permission for weight progress exports", async () => {
+    const app = await buildApp({
+      config,
+      prisma: mockPrisma(),
+      authenticate: mockAuth("user-1", ["weights.read.self"]),
+      logger: false
+    });
+
+    const response = await app.inject({ method: "GET", url: "/health-progress/export/weight?type=excel" });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ ok: false, error: "Permission denied: export.read.self" });
+    await app.close();
+  });
+
+  it("requires weight read permission for weight progress exports", async () => {
+    const app = await buildApp({
+      config,
+      prisma: mockPrisma(),
+      authenticate: mockAuth("user-1", ["export.read.self"]),
+      logger: false
+    });
+
+    const response = await app.inject({ method: "GET", url: "/health-progress/export/weight?type=excel" });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ ok: false, error: "Permission denied: weights.read.self" });
+    await app.close();
+  });
+
   it("creates shared links with a hashed token and returns the one-time token", async () => {
     vi.setSystemTime(new Date("2026-05-08T00:00:00.000Z"));
     const prisma = mockPrisma();
@@ -1275,6 +1463,268 @@ describe("app", () => {
     expect(unknown.statusCode).toBe(404);
     expect(expired.statusCode).toBe(404);
     expect(revoked.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("creates or replaces the active weight progress goal", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.healthGoal.upsert).mockResolvedValue(mockHealthGoal() as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/health-progress/goals/weight",
+      payload: {
+        startDate: "2026-06-01",
+        targetDate: "2026-06-30",
+        startValue: 150,
+        targetValue: 140
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      metricType: "weight_kg",
+      startDate: "2026-06-01",
+      targetDate: "2026-06-30",
+      startValue: 150,
+      targetValue: 140
+    });
+    expect(prisma.healthGoal.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId_metricType: { userId: "user-1", metricType: "weight_kg" } },
+        update: expect.objectContaining({ startValue: 150, targetValue: 140 }),
+        create: expect.objectContaining({ userId: "user-1", metricType: "weight_kg" })
+      })
+    );
+    await app.close();
+  });
+
+  it("upserts one weight metric entry per date", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.healthMetricEntry.upsert).mockResolvedValue(mockHealthMetricEntry("2026-06-02", 149.2) as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/health-progress/metrics/weight/2026-06-02",
+      payload: { value: 149.2 }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      metricType: "weight_kg",
+      date: "2026-06-02",
+      value: 149.2
+    });
+    expect(prisma.healthMetricEntry.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          userId_metricType_date: {
+            userId: "user-1",
+            metricType: "weight_kg",
+            date: new Date("2026-06-02T00:00:00.000Z")
+          }
+        },
+        update: { value: 149.2 },
+        create: expect.objectContaining({ userId: "user-1", metricType: "weight_kg", value: 149.2 })
+      })
+    );
+    await app.close();
+  });
+
+  it("lists weight metric entries with pagination metadata", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.healthMetricEntry.findMany).mockResolvedValue(
+      Array.from({ length: 3 }, (_, index) => mockHealthMetricEntry(`2026-06-0${index + 1}`, 150 - index, index + 1)) as never
+    );
+    vi.mocked(prisma.healthMetricEntry.count).mockResolvedValue(3);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/health-progress/metrics/weight?from=2026-06-01&to=2026-06-30&limit=2"
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      totalCount: 3,
+      nextCursor: "33333333-3333-4333-8333-000000000002"
+    });
+    expect(response.json().data).toHaveLength(2);
+    expect(prisma.healthMetricEntry.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          userId: "user-1",
+          metricType: "weight_kg",
+          date: {
+            gte: new Date("2026-06-01T00:00:00.000Z"),
+            lte: new Date("2026-06-30T00:00:00.000Z")
+          }
+        },
+        orderBy: { date: "desc" },
+        take: 3
+      })
+    );
+    await app.close();
+  });
+
+  it("deletes weight metric entries by owner and date", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.healthMetricEntry.deleteMany).mockResolvedValue({ count: 1 } as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: "/health-progress/metrics/weight/2026-06-02"
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(prisma.healthMetricEntry.deleteMany).toHaveBeenCalledWith({
+      where: {
+        userId: "user-1",
+        metricType: "weight_kg",
+        date: new Date("2026-06-02T00:00:00.000Z")
+      }
+    });
+    await app.close();
+  });
+
+  it("returns insufficient forecast data when the weight goal is missing", async () => {
+    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/health-progress/forecast/weight" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      metricType: "weight_kg",
+      status: "insufficient_data",
+      message: "Weight goal is required to calculate forecast",
+      goal: null
+    });
+    await app.close();
+  });
+
+  it("returns insufficient forecast data when weight entries are missing", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.healthGoal.findUnique).mockResolvedValue(mockHealthGoal() as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/health-progress/forecast/weight?range=all" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: "insufficient_data",
+      message: "At least one weight entry is required to compare actual progress",
+      goal: expect.objectContaining({ metricType: "weight_kg" }),
+      cards: null
+    });
+    expect(response.json().series.forecast.length).toBeGreaterThan(0);
+    await app.close();
+  });
+
+  it("returns forecast series, trend, progress, and ETA for enough weight entries", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.healthGoal.findUnique).mockResolvedValue(mockHealthGoal() as never);
+    vi.mocked(prisma.healthMetricEntry.findMany).mockResolvedValue([
+      mockHealthMetricEntry("2026-06-01", 150, 1),
+      mockHealthMetricEntry("2026-06-02", 149, 2),
+      mockHealthMetricEntry("2026-06-03", 148, 3)
+    ] as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/health-progress/forecast/weight?range=all" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: "ahead",
+      cards: {
+        currentValue: 148,
+        lowestValue: 148,
+        highestValue: 150,
+        totalChange: -2,
+        trendKgPerWeek: -7,
+        eta: {
+          status: "ok",
+          daysRemaining: 8,
+          weeksRemaining: 1.1,
+          estimatedDate: "2026-06-11"
+        },
+        targetProgress: {
+          percent: 20,
+          remainingValue: -8
+        }
+      }
+    });
+    expect(response.json().series.actual).toHaveLength(3);
+    expect(response.json().series.rollingAverage).toEqual([
+      { date: "2026-06-01", value: 150 },
+      { date: "2026-06-02", value: 149.5 },
+      { date: "2026-06-03", value: 149 }
+    ]);
+    await app.close();
+  });
+
+  it("classifies forecast status as on track and behind", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.healthGoal.findUnique).mockResolvedValue(mockHealthGoal() as never);
+    vi.mocked(prisma.healthMetricEntry.findMany)
+      .mockResolvedValueOnce([
+        mockHealthMetricEntry("2026-06-01", 150, 1),
+        mockHealthMetricEntry("2026-06-02", 149.7, 2),
+        mockHealthMetricEntry("2026-06-03", 149.3, 3)
+      ] as never)
+      .mockResolvedValueOnce([
+        mockHealthMetricEntry("2026-06-01", 150, 1),
+        mockHealthMetricEntry("2026-06-02", 150.1, 2),
+        mockHealthMetricEntry("2026-06-03", 150.2, 3)
+      ] as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const onTrack = await app.inject({ method: "GET", url: "/health-progress/forecast/weight?range=all" });
+    const behind = await app.inject({ method: "GET", url: "/health-progress/forecast/weight?range=all" });
+
+    expect(onTrack.statusCode).toBe(200);
+    expect(onTrack.json().status).toBe("on_track");
+    expect(behind.statusCode).toBe(200);
+    expect(behind.json().status).toBe("behind");
+    await app.close();
+  });
+
+  it("returns unavailable ETA when the current trend moves away from target", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.healthGoal.findUnique).mockResolvedValue(mockHealthGoal() as never);
+    vi.mocked(prisma.healthMetricEntry.findMany).mockResolvedValue([
+      mockHealthMetricEntry("2026-06-01", 150, 1),
+      mockHealthMetricEntry("2026-06-02", 151, 2),
+      mockHealthMetricEntry("2026-06-03", 152, 3)
+    ] as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/health-progress/forecast/weight?range=all" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().cards.eta).toEqual({
+      status: "not_progressing",
+      daysRemaining: null,
+      weeksRemaining: null,
+      estimatedDate: null
+    });
+    await app.close();
+  });
+
+  it("enforces permissions for health progress routes", async () => {
+    const app = await buildApp({
+      config,
+      prisma: mockPrisma(),
+      authenticate: mockAuth("user-1", []),
+      logger: false
+    });
+
+    const response = await app.inject({ method: "GET", url: "/health-progress/forecast/weight" });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ ok: false, error: "Permission denied: weights.read.self" });
     await app.close();
   });
 

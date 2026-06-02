@@ -8,16 +8,18 @@ datasource db {
 }
 
 model User {
-  id          String          @id @default(uuid())
-  keycloakId  String          @unique
-  email       String
-  name        String?
-  profile     Profile?
-  preference  UserPreference?
-  records     Record[]
-  sharedLinks SharedLink[]
-  roles       UserRole[]
-  createdAt   DateTime        @default(now())
+  id                  String              @id @default(uuid())
+  keycloakId          String              @unique
+  email               String
+  name                String?
+  profile             Profile?
+  preference          UserPreference?
+  records             Record[]
+  healthMetricEntries HealthMetricEntry[]
+  healthGoals         HealthGoal[]
+  sharedLinks         SharedLink[]
+  roles               UserRole[]
+  createdAt           DateTime            @default(now())
 }
 
 model Role {
@@ -90,6 +92,36 @@ model Record {
   createdAt  DateTime @default(now())
 
   @@index([userId, datetime])
+}
+
+model HealthMetricEntry {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  metricType String
+  date       DateTime
+  value      Float
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([userId, metricType, date])
+  @@index([userId, metricType, date])
+}
+
+model HealthGoal {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  metricType  String
+  startDate   DateTime
+  targetDate  DateTime
+  startValue  Float
+  targetValue Float
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, metricType])
+  @@index([userId, metricType])
 }
 
 model UserPreference {

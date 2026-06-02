@@ -11,6 +11,7 @@ import { registerAuthRoutes } from "./auth/routes.js";
 import { registerBackofficeRoutes } from "./backoffice/routes.js";
 import { registerDashboardRoutes } from "./dashboard/routes.js";
 import { registerExportRoutes } from "./export/routes.js";
+import { registerHealthProgressRoutes } from "./health-progress/routes.js";
 import { registerProfileRoutes } from "./profiles/routes.js";
 import type { AppPrisma } from "./prisma.js";
 import { bootstrapAdminUser } from "./rbac/admin-bootstrap.js";
@@ -90,6 +91,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await registerRecordRoutes(app, options.prisma);
   await registerProfileRoutes(app, options.prisma, keycloakAuth);
   await registerDashboardRoutes(app, options.prisma);
+  await registerHealthProgressRoutes(app, options.prisma);
   await registerExportRoutes(app, options.prisma);
   await registerSharedLinkRoutes(app, options.prisma);
   await registerBackofficeRoutes(app, options.prisma, keycloakAuth);
