@@ -40,6 +40,7 @@ SMTP_FROM="Health SaaS <ggasstock@gmail.com>"
 
 INITIAL_ADMIN_EMAIL=admin@test.com
 INITIAL_ADMIN_PASSWORD=<first-admin-password>
+INITIAL_ADMIN_BOOTSTRAP_ON_START=true
 RBAC_SYNC_ON_START=true
 ```
 
@@ -56,7 +57,9 @@ On Render, this can be run from a one-off shell if available, or from a temporar
 
 The app also runs permission sync on start when `RBAC_SYNC_ON_START=true`. Permission sync updates the fixed catalog, grants new permissions to the system `Admin` role, and grants self-service permissions to the system `User` role.
 
-Run `npm run admin:bootstrap` once per environment to create/reset the initial Keycloak admin user and assign the app `Admin` role.
+The app creates the initial Keycloak admin user on start when `INITIAL_ADMIN_BOOTSTRAP_ON_START=true` and `INITIAL_ADMIN_EMAIL`/`INITIAL_ADMIN_PASSWORD` are set. It does not reset the password on every restart.
+
+Run `npm run admin:bootstrap` only when you need to create/reset the initial admin manually.
 
 ## Smoke Test
 

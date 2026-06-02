@@ -18,6 +18,7 @@ const config: AppConfig = {
   KEYCLOAK_ADMIN_PASSWORD: "admin",
   KEYCLOAK_JWKS_URL: "http://localhost:8080/realms/blood-sugar/protocol/openid-connect/certs",
   RESET_OTP_SECRET: "test-reset-otp-secret-that-is-long-enough",
+  INITIAL_ADMIN_BOOTSTRAP_ON_START: false,
   RBAC_SYNC_ON_START: false
 };
 
@@ -162,6 +163,28 @@ describe("app", () => {
     });
 
     expect(syncPermissions).toHaveBeenCalledWith(prisma);
+    await app.close();
+  });
+
+  it("bootstraps initial admin on app start when enabled", async () => {
+    const prisma = mockPrisma();
+    const keycloakAuth = mockKeycloakAuth();
+    const bootstrapInitialAdmin = vi.fn().mockResolvedValue(undefined);
+    const app = await buildApp({
+      config: {
+        ...config,
+        INITIAL_ADMIN_EMAIL: "admin@test.com",
+        INITIAL_ADMIN_PASSWORD: "admin1234",
+        INITIAL_ADMIN_BOOTSTRAP_ON_START: true
+      },
+      prisma,
+      authenticate: mockAuth(),
+      keycloakAuth,
+      bootstrapInitialAdmin,
+      logger: false
+    });
+
+    expect(bootstrapInitialAdmin).toHaveBeenCalledWith(prisma, keycloakAuth);
     await app.close();
   });
 

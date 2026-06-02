@@ -63,6 +63,7 @@ Optional:
 - `REDIS_URL`
 - `INITIAL_ADMIN_EMAIL`
 - `INITIAL_ADMIN_PASSWORD`
+- `INITIAL_ADMIN_BOOTSTRAP_ON_START`
 - `RBAC_SYNC_ON_START`
 
 ## Roles and Permissions
@@ -85,7 +86,9 @@ Set `INITIAL_ADMIN_EMAIL` and `INITIAL_ADMIN_PASSWORD`, then run:
 npm run admin:bootstrap
 ```
 
-The bootstrap command creates the Keycloak user if needed, sets the configured password, creates the local app user, and assigns the `Admin` role.
+When `INITIAL_ADMIN_BOOTSTRAP_ON_START=true`, the app creates the Keycloak admin user if missing and assigns the local `Admin` role on startup. It does not reset the password on every restart.
+
+The bootstrap command creates the Keycloak user if needed, sets the configured password, creates the local app user, and assigns the `Admin` role. Use it when you need to reset the initial admin password manually.
 
 ## API
 

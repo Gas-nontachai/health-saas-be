@@ -13,6 +13,7 @@ import { registerDashboardRoutes } from "./dashboard/routes.js";
 import { registerExportRoutes } from "./export/routes.js";
 import { registerProfileRoutes } from "./profiles/routes.js";
 import type { AppPrisma } from "./prisma.js";
+import { bootstrapAdminUser } from "./rbac/admin-bootstrap.js";
 import { syncPermissions as syncPermissionCatalog } from "./rbac/sync.js";
 import { registerRecordRoutes } from "./records/routes.js";
 import { registerErrorHandler } from "./shared/errors.js";
@@ -27,6 +28,8 @@ export type BuildAppOptions = {
   passwordReset?: PasswordResetService;
   syncPermissions?: (prisma: AppPrisma) => Promise<unknown>;
   syncPermissionsOnStart?: boolean;
+  bootstrapInitialAdmin?: (prisma: AppPrisma, keycloakAuth: KeycloakAuthService) => Promise<unknown>;
+  bootstrapInitialAdminOnStart?: boolean;
   logger?: boolean;
 };
 
@@ -56,6 +59,26 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 
   if (shouldSyncPermissions) {
     await (options.syncPermissions ?? syncPermissionCatalog)(options.prisma);
+  }
+
+  const shouldBootstrapInitialAdmin =
+    options.bootstrapInitialAdminOnStart ??
+    (options.config.INITIAL_ADMIN_BOOTSTRAP_ON_START && Boolean(options.config.INITIAL_ADMIN_EMAIL && options.config.INITIAL_ADMIN_PASSWORD));
+
+  if (shouldBootstrapInitialAdmin) {
+    await (
+      options.bootstrapInitialAdmin ??
+      (async (prisma, keycloakAuth) => {
+        if (!options.config.INITIAL_ADMIN_EMAIL || !options.config.INITIAL_ADMIN_PASSWORD) return;
+        await bootstrapAdminUser({
+          prisma,
+          keycloakAuth,
+          email: options.config.INITIAL_ADMIN_EMAIL,
+          password: options.config.INITIAL_ADMIN_PASSWORD,
+          resetExistingPassword: false
+        });
+      })
+    )(options.prisma, keycloakAuth);
   }
 
   app.get("/health", async () => ({
