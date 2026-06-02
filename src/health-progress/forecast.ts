@@ -162,15 +162,15 @@ export function interpolateForecast(goal: GoalRow, date: Date): number {
   return goal.startValue + ((goal.targetValue - goal.startValue) * elapsedDays) / totalDays;
 }
 
-export function getVisibleForecastStart(goal: GoalRow, range: "30d" | "90d" | "all", now: Date): Date {
+export function getVisibleForecastStart(goal: GoalRow, range: "7d" | "30d" | "all", now: Date): Date {
   const rangeStart = getRangeStart(range, now);
   if (!rangeStart || rangeStart < goal.startDate) return goal.startDate;
   return rangeStart;
 }
 
-export function getRangeStart(range: "30d" | "90d" | "all", now: Date): Date | null {
+export function getRangeStart(range: "7d" | "30d" | "all", now: Date): Date | null {
   if (range === "all") return null;
-  const days = range === "30d" ? 30 : 90;
+  const days = range === "7d" ? 7 : 30;
   const start = new Date(now);
   start.setUTCDate(start.getUTCDate() - days + 1);
   return start;

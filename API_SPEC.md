@@ -992,7 +992,7 @@ Main dashboard endpoint สำหรับ Forecast vs Actual
 
 | Param | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `range` | `string` | ❌ | `30d` | `30d`, `90d`, `all` |
+| `range` | `string` | ❌ | `30d` | `7d`, `30d`, `all` |
 
 **Status Rules:**
 - `ahead` — actual ดีกว่า forecast อย่างน้อย `0.5 kg`

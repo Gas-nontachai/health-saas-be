@@ -76,7 +76,7 @@ const metricListQuerySchema = z
   });
 
 const forecastQuerySchema = z.object({
-  range: z.enum(["30d", "90d", "all"]).default("30d")
+  range: z.enum(["7d", "30d", "all"]).default("30d")
 });
 
 const exportQuerySchema = z.object({
@@ -274,7 +274,7 @@ export async function registerHealthProgressRoutes(app: FastifyInstance, prisma:
   );
 }
 
-function buildForecastResponse(range: "30d" | "90d" | "all", goal: GoalRow | null, entries: MetricEntryRow[], now: Date) {
+function buildForecastResponse(range: "7d" | "30d" | "all", goal: GoalRow | null, entries: MetricEntryRow[], now: Date) {
   if (!goal) {
     return {
       range,
