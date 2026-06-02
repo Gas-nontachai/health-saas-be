@@ -19,4 +19,15 @@ const result = spawnSync("npx", ["prisma", "migrate", "deploy"], {
   shell: process.platform === "win32"
 });
 
-process.exit(result.status ?? 1);
+if ((result.status ?? 1) !== 0) {
+  process.exit(result.status ?? 1);
+}
+
+console.log("Syncing permission catalog.");
+
+const syncResult = spawnSync("node", ["dist/src/rbac/sync-cli.js"], {
+  stdio: "inherit",
+  shell: process.platform === "win32"
+});
+
+process.exit(syncResult.status ?? 1);

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { requirePermission } from "../rbac/authorize.js";
 import type { KeycloakAuthService } from "./keycloak.js";
 import type { PasswordResetService } from "./password-reset.js";
 
@@ -53,14 +54,14 @@ export async function registerAuthRoutes(
     return keycloakAuth.login(body);
   });
 
-  app.get("/auth/me", { preHandler: app.authenticate }, async (request) => request.user);
+  app.get("/auth/me", { preHandler: [app.authenticate, requirePermission("auth.read.self")] }, async (request) => request.user);
 
   app.post("/auth/refresh", async (request) => {
     const body = refreshTokenSchema.parse(request.body);
     return keycloakAuth.refreshToken(body.refreshToken);
   });
 
-  app.post("/auth/password/reset", { preHandler: app.authenticate }, async (request) => {
+  app.post("/auth/password/reset", { preHandler: [app.authenticate, requirePermission("auth.reset.self")] }, async (request) => {
     const body = resetPasswordSchema.parse(request.body);
     await passwordReset.resetPassword({
       keycloakId: request.user.keycloakId,

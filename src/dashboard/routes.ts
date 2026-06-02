@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { AppPrisma } from "../prisma.js";
+import { requirePermission } from "../rbac/authorize.js";
 
 const WIDGET_KEYS = [
   "summary",
@@ -52,7 +53,7 @@ type WidgetResult = {
 };
 
 export async function registerDashboardRoutes(app: FastifyInstance, prisma: AppPrisma): Promise<void> {
-  app.get("/dashboard/preferences", { preHandler: app.authenticate }, async (request) => {
+  app.get("/dashboard/preferences", { preHandler: [app.authenticate, requirePermission("dashboard.read.self")] }, async (request) => {
     const preference = await prisma.userPreference.findUnique({
       where: { userId: request.user.id },
       select: { dashboardWidgets: true }
@@ -63,7 +64,7 @@ export async function registerDashboardRoutes(app: FastifyInstance, prisma: AppP
     };
   });
 
-  app.put("/dashboard/preferences", { preHandler: app.authenticate }, async (request) => {
+  app.put("/dashboard/preferences", { preHandler: [app.authenticate, requirePermission("dashboard.update.self")] }, async (request) => {
     const body = dashboardPreferenceBodySchema.parse(request.body);
     const widgets = normalizeDashboardWidgets(body.widgets);
 
@@ -76,7 +77,7 @@ export async function registerDashboardRoutes(app: FastifyInstance, prisma: AppP
     return { widgets };
   });
 
-  app.get("/dashboard", { preHandler: app.authenticate }, async (request) => {
+  app.get("/dashboard", { preHandler: [app.authenticate, requirePermission("dashboard.read.self")] }, async (request) => {
     const query = dashboardQuerySchema.parse(request.query);
     const requestedWidgets = query.widgets;
     const needsPeriodComparison = requestedWidgets.includes("periodComparison") && query.range !== "all";

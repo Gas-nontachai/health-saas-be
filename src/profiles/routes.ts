@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { KeycloakAuthService } from "../auth/keycloak.js";
 import type { AppPrisma } from "../prisma.js";
+import { requirePermission } from "../rbac/authorize.js";
 
 const updateProfileSchema = z
   .object({
@@ -16,7 +17,7 @@ const updateProfileSchema = z
   });
 
 export async function registerProfileRoutes(app: FastifyInstance, prisma: AppPrisma, keycloakAuth: KeycloakAuthService): Promise<void> {
-  app.get("/profile", { preHandler: app.authenticate }, async (request) => {
+  app.get("/profile", { preHandler: [app.authenticate, requirePermission("profile.read.self")] }, async (request) => {
     const [user, profile] = await Promise.all([
       prisma.user.findUniqueOrThrow({ where: { id: request.user.id }, select: { email: true, name: true } }),
       prisma.profile.upsert({ where: { userId: request.user.id }, update: {}, create: { userId: request.user.id } })
@@ -24,7 +25,7 @@ export async function registerProfileRoutes(app: FastifyInstance, prisma: AppPri
     return { ...profile, email: user.email, name: user.name };
   });
 
-  app.put("/profile", { preHandler: app.authenticate }, async (request) => {
+  app.put("/profile", { preHandler: [app.authenticate, requirePermission("profile.update.self")] }, async (request) => {
     const body = updateProfileSchema.parse(request.body);
     const { firstName, lastName, email, ...profileData } = body;
 

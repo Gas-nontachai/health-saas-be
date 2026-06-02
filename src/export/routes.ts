@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { AppPrisma } from "../prisma.js";
+import { requirePermission } from "../rbac/authorize.js";
 import { HttpError } from "../shared/errors.js";
 import { buildExcel, buildPdf, type ExportContext } from "./builders.js";
 
@@ -9,7 +10,7 @@ const exportQuerySchema = z.object({
 });
 
 export async function registerExportRoutes(app: FastifyInstance, prisma: AppPrisma): Promise<void> {
-  app.get("/export", { preHandler: app.authenticate }, async (request, reply) => {
+  app.get("/export", { preHandler: [app.authenticate, requirePermission("export.read.self")] }, async (request, reply) => {
     const query = exportQuerySchema.parse(request.query);
 
     const [records, profile] = await Promise.all([
