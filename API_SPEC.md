@@ -831,15 +831,114 @@ FE should treat these permissions as UX hints only. Backend guards remain the so
 
 ---
 
-### 6. Health Progress Forecast
+### 6. Unified Health
+
+Canonical health APIs live under `/health`. Legacy endpoints such as `/records`, `/dashboard`, `/export`, and `/health-progress/*` remain available during migration.
+
+#### Supported Data Types
+
+| Key | Description |
+|---|---|
+| `bloodSugar` | Blood sugar records and summaries |
+| `weight` | Weight entries, goal, forecast, ETA |
+
+#### `GET /health/dashboard`
+
+Unified dashboard endpoint. FE selects included health data with `dataTypes`.
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permission:** `dashboard.read.self`
+
+**Query Parameters:**
+
+| Param | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `range` | `string` | ❌ | `30d` | `7d`, `30d`, `all` |
+| `dataTypes` | `string` | ❌ | `bloodSugar` | comma-separated: `bloodSugar`, `weight`, or `bloodSugar,weight` |
+
+**Response shape**
+
+```json
+{
+  "range": "30d",
+  "dataTypes": ["bloodSugar", "weight"],
+  "summary": {
+    "bloodSugar": { "status": "ok", "data": {} },
+    "weight": { "status": "ok", "data": {} }
+  },
+  "series": {
+    "bloodSugar": [],
+    "weight": []
+  },
+  "alerts": {
+    "bloodSugar": []
+  },
+  "forecast": {
+    "weight": {}
+  }
+}
+```
+
+#### `GET /health/export`
+
+Unified export endpoint. FE selects report sections with `dataTypes`.
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permissions:** `export.read.self`; additionally `weights.read.self` when `dataTypes` includes `weight`
+
+**Query Parameters:**
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `type` | `string` | ✅ | `excel`, `pdf` |
+| `dataTypes` | `string` | ❌ | comma-separated; default `bloodSugar` |
+
+**Filenames:**
+- `bloodSugar` only: `blood-sugar-records.xlsx` / `blood-sugar-records.pdf`
+- `weight` only: `weight-progress-report.xlsx` / `weight-progress-report.pdf`
+- both: `health-report.xlsx` / `health-report.pdf`
+
+#### Blood Sugar Canonical Endpoints
+
+| Endpoint | Description |
+|---|---|
+| `GET /health/blood-sugar/entries` | Alias-compatible list of blood sugar records |
+| `POST /health/blood-sugar/entries` | Create blood sugar record |
+| `PUT /health/blood-sugar/entries/:id` | Update blood sugar record |
+| `DELETE /health/blood-sugar/entries/:id` | Delete blood sugar record |
+| `GET /health/blood-sugar/dashboard?range=7d\|30d\|all` | Blood-sugar dashboard data |
+| `GET /health/blood-sugar/export?type=excel\|pdf` | Blood-sugar export |
+
+#### Weight Canonical Endpoints
+
+| Endpoint | Description |
+|---|---|
+| `PUT /health/weight/entries/:date` | Upsert daily weight entry |
+| `GET /health/weight/entries` | List weight entries |
+| `DELETE /health/weight/entries/:date` | Delete weight entry |
+| `GET /health/weight/goal` | Get active weight goal |
+| `PUT /health/weight/goal` | Create/replace active weight goal |
+| `GET /health/weight/forecast?range=7d\|30d\|all` | Forecast vs Actual |
+| `GET /health/weight/dashboard?range=7d\|30d\|all` | Weight dashboard data |
+| `GET /health/weight/export?type=excel\|pdf` | Weight progress export |
+
+Successful weight entry upserts also sync `Profile.weight` to the value of the user's latest dated `weight_kg` entry. Backdated edits do not replace the profile weight when a newer weight entry already exists.
+
+### 6.1 Health Progress Forecast (Deprecated Alias)
 
 Progress Forecast เป็น feature หลักสำหรับเทียบ **Forecast vs Actual** ของ health metric โดย MVP รองรับ metric แรกคือ `weight_kg`
+
+> Deprecated: use `/health/weight/*` canonical endpoints for new FE work.
 
 > `Profile.weight` ยังใช้สำหรับ BMI/export เดิมเท่านั้น ไม่ใช่ source ของ forecast calculations
 
 #### `PUT /health-progress/metrics/weight/:date`
 
 เพิ่มหรือแก้ไขน้ำหนักรายวัน 1 ค่า ต่อ 1 calendar date
+
+เมื่อบันทึกสำเร็จ ระบบจะ sync `Profile.weight` เป็นค่าน้ำหนักของ `weight_kg` entry วันที่ล่าสุดของ user เสมอ ถ้าแก้ข้อมูลย้อนหลังและมี entry วันที่ใหม่กว่าอยู่แล้ว profile จะยังใช้ค่าน้ำหนักจากวันที่ใหม่กว่า
 
 **Headers:** `Authorization: Bearer <token>`
 
@@ -1216,14 +1315,15 @@ Body: binary PDF file (A4 landscape) — มี header ข้อมูลผู�
 
 #### `POST /shared-links`
 
-สร้าง public link สำหรับแชร์ข้อมูลน้ำตาลและยาให้แพทย์ดูโดยไม่ต้อง login
+สร้าง public link สำหรับแชร์ข้อมูลสุขภาพที่เลือกให้แพทย์ดูโดยไม่ต้อง login
 
 **Headers:** `Authorization: Bearer <token>`
 
 **Rules:**
 - ช่วงข้อมูลที่แชร์ได้สูงสุด 90 วัน
 - อายุลิงก์เลือกได้ `1`, `3`, `7`, `30` วัน
-- ถ้าช่วงที่เลือกมี records เกิน 1,000 รายการ จะไม่สร้างลิงก์และตอบ `400`
+- ถ้าช่วงที่เลือกมี records/entries รวมกันเกิน 1,000 รายการ จะไม่สร้างลิงก์และตอบ `400`
+- `dataTypes` รองรับ `bloodSugar`, `weight`; ถ้าไม่ส่งจะ default เป็น `["bloodSugar"]`
 - backend เก็บ token hash สำหรับ public lookup และเก็บ public token เพื่อให้ history สร้าง `publicPath` ได้
 
 **Request**
@@ -1232,7 +1332,8 @@ Body: binary PDF file (A4 landscape) — มี header ข้อมูลผู�
 {
   "startDate": "2026-05-01T00:00:00.000Z",
   "endDate": "2026-05-31T23:59:59.999Z",
-  "expiresInDays": 7
+  "expiresInDays": 7,
+  "dataTypes": ["bloodSugar", "weight"]
 }
 ```
 
@@ -1245,6 +1346,7 @@ Body: binary PDF file (A4 landscape) — มี header ข้อมูลผู�
   "token": "abc123",
   "dataStartAt": "2026-05-01T00:00:00.000Z",
   "dataEndAt": "2026-05-31T23:59:59.999Z",
+  "dataTypes": ["bloodSugar", "weight"],
   "expiresAt": "2026-06-07T00:00:00.000Z",
   "revokedAt": null,
   "status": "active",
@@ -1268,6 +1370,7 @@ Body: binary PDF file (A4 landscape) — มี header ข้อมูลผู�
       "publicPath": "/shared/abc123",
       "dataStartAt": "2026-05-01T00:00:00.000Z",
       "dataEndAt": "2026-05-31T23:59:59.999Z",
+      "dataTypes": ["bloodSugar"],
       "expiresAt": "2026-06-07T00:00:00.000Z",
       "revokedAt": null,
       "status": "active",
@@ -1292,6 +1395,7 @@ Body: binary PDF file (A4 landscape) — มี header ข้อมูลผู�
   "id": "22222222-2222-4222-8222-222222222222",
   "dataStartAt": "2026-05-01T00:00:00.000Z",
   "dataEndAt": "2026-05-31T23:59:59.999Z",
+  "dataTypes": ["bloodSugar"],
   "expiresAt": "2026-06-07T00:00:00.000Z",
   "revokedAt": "2026-05-08T12:00:00.000Z",
   "status": "revoked",
@@ -1317,7 +1421,29 @@ Public endpoint สำหรับหน้า `/shared/{token}` ไม่ต้
     "dataStartAt": "2026-05-01T00:00:00.000Z",
     "dataEndAt": "2026-05-31T23:59:59.999Z",
     "expiresAt": "2026-06-07T00:00:00.000Z",
-    "status": "active"
+    "status": "active",
+    "dataTypes": ["bloodSugar", "weight"]
+  },
+  "data": {
+    "bloodSugar": {
+      "records": [
+        {
+          "datetime": "2026-05-02T10:00:00.000Z",
+          "bloodSugar": 120,
+          "medMorning": 1,
+          "medEvening": null,
+          "note": "before breakfast"
+        }
+      ],
+      "summary": { "status": "ok", "data": {} }
+    },
+    "weight": {
+      "entries": [
+        { "date": "2026-05-02", "value": 150.2 }
+      ],
+      "goal": null,
+      "forecastSummary": { "status": "insufficient_data" }
+    }
   },
   "records": [
     {
@@ -1335,6 +1461,8 @@ Public endpoint สำหรับหน้า `/shared/{token}` ไม่ต้
   }
 }
 ```
+
+> `records` top-level เป็น legacy compatibility สำหรับ blood-sugar links; FE ใหม่ควรอ่านจาก `data.bloodSugar.records`
 
 **Errors:**
 - `404` ถ้า token ไม่พบ, หมดอายุ, หรือถูก revoke
@@ -1658,6 +1786,7 @@ replace roles ของ user
 | `publicToken` | `String?` | raw opaque token สำหรับสร้าง `publicPath` ใน history (unique, nullable สำหรับ legacy rows) |
 | `dataStartAt` | `DateTime` | เวลาเริ่มต้นของ records ที่แชร์ |
 | `dataEndAt` | `DateTime` | เวลาสิ้นสุดของ records ที่แชร์ |
+| `dataTypes` | `Json` | selected health data types, default `["bloodSugar"]` |
 | `expiresAt` | `DateTime` | วันหมดอายุของลิงก์ |
 | `revokedAt` | `DateTime?` | เวลาที่ยกเลิกลิงก์ก่อนหมดอายุ |
 | `createdAt` | `DateTime` | วันที่สร้าง |

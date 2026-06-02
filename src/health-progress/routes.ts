@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { buildWeightProgressExcel, buildWeightProgressPdf, type WeightProgressContext } from "../export/builders.js";
+import { upsertWeightEntryAndSyncProfile } from "../health/weight/service.js";
 import type { AppPrisma } from "../prisma.js";
 import { composePreHandlers, requirePermission } from "../rbac/authorize.js";
 import { HttpError } from "../shared/errors.js";
@@ -118,22 +119,7 @@ export async function registerHealthProgressRoutes(app: FastifyInstance, prisma:
     const body = metricValueSchema.parse(request.body);
     const date = toDateOnly(params.date);
 
-    const entry = await prisma.healthMetricEntry.upsert({
-      where: {
-        userId_metricType_date: {
-          userId: request.user.id,
-          metricType: WEIGHT_METRIC_TYPE,
-          date
-        }
-      },
-      update: { value: body.value },
-      create: {
-        userId: request.user.id,
-        metricType: WEIGHT_METRIC_TYPE,
-        date,
-        value: body.value
-      }
-    });
+    const entry = await upsertWeightEntryAndSyncProfile(prisma, request.user.id, date, body.value);
 
     return serializeMetricEntry(entry);
   });

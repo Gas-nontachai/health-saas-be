@@ -16,7 +16,7 @@ import {
   type GoalRow,
   type MetricEntryRow,
   type ProgressStatus
-} from "../health-progress/forecast.js";
+} from "../health/weight/forecast.js";
 
 export type ExportRecord = {
   datetime: Date;
@@ -48,6 +48,21 @@ export type WeightProgressContext = {
   patientName: string;
   patientEmail: string;
   exportedAt: Date;
+};
+
+export type UnifiedHealthExportInput = {
+  bloodSugar?: {
+    records: ExportRecord[];
+    context: ExportContext;
+  };
+  weight?: {
+    entries: MetricEntryRow[];
+    goal: GoalRow | null;
+    context: WeightProgressContext;
+  };
+  exportedAt: Date;
+  patientName: string;
+  patientEmail: string;
 };
 
 type WeightProgressSummary =
@@ -523,6 +538,181 @@ export function buildWeightProgressPdf(entries: MetricEntryRow[], goal: GoalRow 
     drawWeightPageFooters(doc, ctx);
     doc.end();
   });
+}
+
+export async function buildUnifiedHealthExcel(input: UnifiedHealthExportInput): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Health SaaS";
+  workbook.created = input.exportedAt;
+
+  const summary = workbook.addWorksheet("Summary");
+  summary.columns = [{ width: 28 }, { width: 42 }];
+  const titleRow = summary.addRow(["Health Report"]);
+  titleRow.font = { name: EXPORT_FONT_FAMILY, bold: true, size: 16 };
+  summary.mergeCells("A1:B1");
+  summary.addRow([]);
+  summary.addRow(["Patient Name", input.patientName]);
+  summary.addRow(["Email", input.patientEmail]);
+  summary.addRow(["Export Date", formatDatetime(input.exportedAt)]);
+  summary.addRow(["Included Data", [input.bloodSugar ? "Blood Sugar" : null, input.weight ? "Weight" : null].filter(Boolean).join(", ")]);
+  summary.addRow([]);
+
+  if (input.bloodSugar) {
+    const stats = computeStats(input.bloodSugar.records);
+    const header = summary.addRow(["Blood Sugar"]);
+    header.font = { name: EXPORT_FONT_FAMILY, bold: true, size: 13 };
+    summary.addRow(["Blood Sugar Records", input.bloodSugar.records.length]);
+    if (stats) {
+      summary.addRow(["Average (mg/dL)", stats.avg]);
+      summary.addRow(["Min / Max (mg/dL)", `${stats.min} / ${stats.max}`]);
+    }
+    summary.addRow([]);
+  }
+
+  if (input.weight) {
+    const weightSummary = buildWeightProgressSummary(input.weight.entries, input.weight.goal);
+    const header = summary.addRow(["Weight"]);
+    header.font = { name: EXPORT_FONT_FAMILY, bold: true, size: 13 };
+    summary.addRow(["Weight Entries", input.weight.entries.length]);
+    summary.addRow(["Forecast Status", weightSummary.status]);
+    summary.addRow(["Current Weight (kg)", formatNullableNumber(weightSummary.currentValue)]);
+    summary.addRow(["Trend (kg/week)", formatNullableNumber(weightSummary.trendKgPerWeek)]);
+  }
+  styleLabelColumn(summary);
+
+  if (input.bloodSugar) {
+    addBloodSugarSheet(workbook, input.bloodSugar.records);
+  }
+  if (input.weight) {
+    addWeightLogSheet(workbook, input.weight.entries, input.weight.goal);
+  }
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
+}
+
+export function buildUnifiedHealthPdf(input: UnifiedHealthExportInput): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ margin: 40, size: "A4", bufferPages: true });
+    const chunks: Buffer[] = [];
+
+    doc.on("data", (chunk: Buffer) => chunks.push(chunk));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+
+    registerPdfFonts(doc);
+    doc
+      .fontSize(6.5)
+      .font("Latin")
+      .fillColor("#999999")
+      .text(`Exported: ${formatDatetime(input.exportedAt)}`, doc.page.width - 210, 24, {
+        width: 170,
+        align: "right",
+        lineBreak: false
+      });
+
+    doc.y = 64;
+    doc.fontSize(18).font("Latin-Bold").fillColor("#111111").text("Health Report", 40, doc.y, {
+      width: doc.page.width - 80,
+      align: "center"
+    });
+    doc.moveDown(0.35);
+    doc.fontSize(9).fillColor("#555555");
+    drawCenteredFallbackLine(doc, `Patient: ${input.patientName}  |  Email: ${input.patientEmail}`);
+    doc.moveDown(1);
+
+    if (input.bloodSugar) {
+      const stats = computeStats(input.bloodSugar.records);
+      doc.fontSize(11).font("Latin-Bold").fillColor("#111111").text("Blood Sugar", TABLE_LEFT);
+      doc.fontSize(8).font("Latin").fillColor("#333333").text(`Records: ${input.bloodSugar.records.length}`, TABLE_LEFT);
+      if (stats) {
+        doc.text(`Avg: ${stats.avg} mg/dL  |  Min: ${stats.min}  |  Max: ${stats.max}`, TABLE_LEFT);
+      }
+      doc.moveDown(0.8);
+    }
+
+    if (input.weight) {
+      const weightSummary = buildWeightProgressSummary(input.weight.entries, input.weight.goal);
+      doc.fontSize(11).font("Latin-Bold").fillColor("#111111").text("Weight", TABLE_LEFT);
+      doc
+        .fontSize(8)
+        .font("Latin")
+        .fillColor("#333333")
+        .text(
+          `Entries: ${input.weight.entries.length}  |  Status: ${weightSummary.status}  |  Current: ${formatNullableNumber(
+            weightSummary.currentValue
+          )} kg  |  Trend: ${formatNullableNumber(weightSummary.trendKgPerWeek)} kg/week`,
+          TABLE_LEFT
+        );
+    }
+
+    drawUnifiedPageFooters(doc, input);
+    doc.end();
+  });
+}
+
+function addBloodSugarSheet(workbook: ExcelJS.Workbook, records: ExportRecord[]): void {
+  const sheet = workbook.addWorksheet("Blood Sugar");
+  sheet.columns = [
+    { header: "#", key: "no", width: 6 },
+    { header: "Date", key: "date", width: 14 },
+    { header: "Time (UTC)", key: "time", width: 12 },
+    { header: "Blood Sugar (mg/dL)", key: "bloodSugar", width: 20 },
+    { header: "Status", key: "status", width: 14 },
+    { header: "Morning Med", key: "medMorning", width: 14 },
+    { header: "Evening Med", key: "medEvening", width: 14 },
+    { header: "Note", key: "note", width: 52 }
+  ];
+  styleWeightLogHeader(sheet);
+  records.forEach((record, index) => {
+    const iso = record.datetime.toISOString();
+    sheet.addRow({
+      no: index + 1,
+      date: iso.slice(0, 10),
+      time: iso.slice(11, 19),
+      bloodSugar: record.bloodSugar,
+      status: classifyBloodSugar(record.bloodSugar),
+      medMorning: record.medMorning ?? "-",
+      medEvening: record.medEvening ?? "-",
+      note: record.note ?? ""
+    });
+  });
+  sheet.views = [{ state: "frozen", ySplit: 1 }];
+}
+
+function addWeightLogSheet(workbook: ExcelJS.Workbook, entries: MetricEntryRow[], goal: GoalRow | null): void {
+  const sheet = workbook.addWorksheet("Weight Progress");
+  sheet.columns = [
+    { header: "#", key: "no", width: 6 },
+    { header: "Date", key: "date", width: 14 },
+    { header: "Weight (kg)", key: "weight", width: 14 },
+    { header: "7-Day Average", key: "rollingAverage", width: 16 },
+    { header: "Forecast (kg)", key: "forecast", width: 16 },
+    { header: "Delta vs Forecast", key: "delta", width: 18 }
+  ];
+  styleWeightLogHeader(sheet);
+  const rollingAverage = buildRollingAverageSeries(entries);
+  entries.forEach((entry, index) => {
+    const forecastValue = goal ? round1(interpolateForecast(goal, entry.date)) : null;
+    sheet.addRow({
+      no: index + 1,
+      date: formatDate(entry.date),
+      weight: round1(entry.value),
+      rollingAverage: rollingAverage[index].value,
+      forecast: forecastValue ?? "-",
+      delta: forecastValue !== null ? round1(entry.value - forecastValue) : "-"
+    });
+  });
+  sheet.views = [{ state: "frozen", ySplit: 1 }];
+}
+
+function drawUnifiedPageFooters(doc: PDFKit.PDFDocument, input: UnifiedHealthExportInput): void {
+  const pageCount = doc.bufferedPageRange().count;
+  for (let i = 0; i < pageCount; i++) {
+    doc.switchToPage(i);
+    doc.fontSize(7).fillColor("#999999");
+    drawCenteredFallbackLine(doc, `Page ${i + 1} of ${pageCount}  -  Health Report  -  ${input.patientName}`, doc.page.height - 55);
+  }
 }
 
 function buildWeightProgressSummary(entries: MetricEntryRow[], goal: GoalRow | null): WeightProgressSummary {
