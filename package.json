@@ -9,8 +9,8 @@
     "start": "node dist/src/server.js",
     "lint": "tsc --noEmit",
     "test": "vitest run",
-    "permissions:sync": "npx tsx src/rbac/sync-cli.ts",
-    "admin:bootstrap": "npx tsx src/rbac/admin-bootstrap-cli.ts",
+    "permissions:sync": "npx tsx src/modules/identity/rbac/sync-cli.ts",
+    "admin:bootstrap": "npx tsx src/modules/identity/rbac/admin-bootstrap-cli.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev"
   },

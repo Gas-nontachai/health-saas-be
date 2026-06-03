@@ -2,10 +2,10 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import ExcelJS from "exceljs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
-import type { AppConfig } from "../src/config.js";
-import type { AppPrisma } from "../src/prisma.js";
-import { PERMISSION_CODES } from "../src/rbac/permissions.js";
-import { HttpError } from "../src/shared/errors.js";
+import type { AppConfig } from "../src/config/index.js";
+import type { AppPrisma } from "../src/infra/prisma.js";
+import { PERMISSION_CODES } from "../src/modules/identity/rbac/permissions.js";
+import { HttpError } from "../src/common/errors.js";
 
 const config: AppConfig = {
   NODE_ENV: "test",
@@ -659,6 +659,9 @@ describe("app", () => {
 
   it("updates dashboard preferences with normalized widget order", async () => {
     const prisma = mockPrisma();
+    vi.mocked(prisma.userPreference.findUnique).mockResolvedValue({
+      dashboardWidgets: { bloodSugar: ["summary"], weight: ["summary", "goalProgress"] }
+    } as unknown as Awaited<ReturnType<typeof prisma.userPreference.findUnique>>);
     const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
 
     const response = await app.inject({
@@ -671,8 +674,8 @@ describe("app", () => {
     expect(response.json()).toEqual({ widgets: ["summary", "trend", "bmi"] });
     expect(prisma.userPreference.upsert).toHaveBeenCalledWith({
       where: { userId: "user-1" },
-      update: { dashboardWidgets: ["summary", "trend", "bmi"] },
-      create: { userId: "user-1", dashboardWidgets: ["summary", "trend", "bmi"] }
+      update: { dashboardWidgets: { bloodSugar: ["summary", "trend", "bmi"], weight: ["summary", "goalProgress"] } },
+      create: { userId: "user-1", dashboardWidgets: { bloodSugar: ["summary", "trend", "bmi"], weight: ["summary", "goalProgress"] } }
     });
     await app.close();
   });
@@ -689,6 +692,11 @@ describe("app", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ widgets: ["summary"] });
+    expect(prisma.userPreference.upsert).toHaveBeenCalledWith({
+      where: { userId: "user-1" },
+      update: { dashboardWidgets: { bloodSugar: ["summary"], weight: ["summary", "trend", "forecast"] } },
+      create: { userId: "user-1", dashboardWidgets: { bloodSugar: ["summary"], weight: ["summary", "trend", "forecast"] } }
+    });
     await app.close();
   });
 
@@ -1230,7 +1238,53 @@ describe("app", () => {
     await app.close();
   });
 
-  it("returns unified health dashboard for selected blood sugar and weight data", async () => {
+  it("returns unified health dashboard widgets for selected blood sugar data", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.record.findMany).mockResolvedValue([
+      { datetime: new Date("2026-06-01T08:00:00.000Z"), bloodSugar: 120, medMorning: 1, medEvening: null, note: null },
+      { datetime: new Date("2026-06-02T08:00:00.000Z"), bloodSugar: 200, medMorning: 1, medEvening: null, note: "high" }
+    ] as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/health/dashboard?range=7d&dataTypes=bloodSugar&widgets=summary,trend,timeInRange" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      range: "7d",
+      dataTypes: ["bloodSugar"],
+      availableDataTypes: ["bloodSugar", "weight"],
+      availableWidgets: {
+        bloodSugar: expect.arrayContaining(["summary", "trend", "timeInRange"])
+      },
+      defaultWidgets: {
+        bloodSugar: expect.arrayContaining(["summary", "trend"])
+      },
+      widgets: {
+        bloodSugar: {
+          summary: { status: "ok", data: { avg: 160, min: 120, max: 200, count: 2 } },
+          trend: {
+            status: "ok",
+            data: [
+              { datetime: "2026-06-01T08:00:00.000Z", value: 120 },
+              { datetime: "2026-06-02T08:00:00.000Z", value: 200 }
+            ]
+          },
+          timeInRange: {
+            status: "ok",
+            data: {
+              total: 2,
+              normal: { count: 1, percent: 50 },
+              high: { count: 1, percent: 50 },
+              low: { count: 0, percent: 0 }
+            }
+          }
+        }
+      }
+    });
+    await app.close();
+  });
+
+  it("returns unified health dashboard widgets for selected blood sugar and weight data", async () => {
     const prisma = mockPrisma();
     vi.mocked(prisma.record.findMany).mockResolvedValue([
       { datetime: new Date("2026-06-01T08:00:00.000Z"), bloodSugar: 120, medMorning: 1, medEvening: null, note: null }
@@ -1243,18 +1297,81 @@ describe("app", () => {
     ] as never);
     const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
 
-    const response = await app.inject({ method: "GET", url: "/health/dashboard?range=all&dataTypes=bloodSugar,weight" });
+    const response = await app.inject({ method: "GET", url: "/health/dashboard?range=all&dataTypes=bloodSugar,weight&widgets=summary,trend,forecast" });
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       dataTypes: ["bloodSugar", "weight"],
-      summary: {
-        bloodSugar: { status: "ok" },
-        weight: { status: "ok" }
-      },
-      forecast: {
-        weight: { status: "ahead" }
+      widgets: {
+        bloodSugar: {
+          summary: { status: "ok" },
+          trend: { status: "ok" }
+        },
+        weight: {
+          summary: { status: "ok" },
+          trend: { status: "ok" },
+          forecast: { status: "ok", data: { status: "ahead" } }
+        }
       }
+    });
+    await app.close();
+  });
+
+  it("rejects dashboard widgets unsupported by the selected health data types", async () => {
+    const prisma = mockPrisma();
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/health/dashboard?dataTypes=bloodSugar&widgets=forecast" });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ ok: false });
+    expect(prisma.record.findMany).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("returns canonical health dashboard preferences with per-data-type defaults", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.userPreference.findUnique).mockResolvedValue({
+      dashboardWidgets: ["trend", "summary", "bmi"]
+    } as Awaited<ReturnType<typeof prisma.userPreference.findUnique>>);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/health/dashboard/preferences" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      widgets: {
+        bloodSugar: ["summary", "trend"],
+        weight: ["summary", "trend", "forecast"]
+      }
+    });
+    await app.close();
+  });
+
+  it("updates canonical health dashboard preferences per data type", async () => {
+    const prisma = mockPrisma();
+    vi.mocked(prisma.userPreference.findUnique).mockResolvedValue({
+      dashboardWidgets: { bloodSugar: ["summary", "trend"], weight: ["summary", "trend", "forecast"] }
+    } as unknown as Awaited<ReturnType<typeof prisma.userPreference.findUnique>>);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({
+      method: "PUT",
+      url: "/health/dashboard/preferences",
+      payload: { widgets: { bloodSugar: ["trend", "timeInRange"], weight: ["forecast", "goalProgress"] } }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      widgets: {
+        bloodSugar: ["summary", "trend", "timeInRange"],
+        weight: ["summary", "forecast", "goalProgress"]
+      }
+    });
+    expect(prisma.userPreference.upsert).toHaveBeenCalledWith({
+      where: { userId: "user-1" },
+      update: { dashboardWidgets: { bloodSugar: ["summary", "trend", "timeInRange"], weight: ["summary", "forecast", "goalProgress"] } },
+      create: { userId: "user-1", dashboardWidgets: { bloodSugar: ["summary", "trend", "timeInRange"], weight: ["summary", "forecast", "goalProgress"] } }
     });
     await app.close();
   });

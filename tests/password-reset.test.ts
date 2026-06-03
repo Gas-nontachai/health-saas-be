@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { createPasswordResetService } from "../src/auth/password-reset.js";
-import type { AppConfig } from "../src/config.js";
-import type { AppPrisma } from "../src/prisma.js";
+import { createPasswordResetService } from "../src/modules/identity/auth/password-reset.js";
+import type { AppConfig } from "../src/config/index.js";
+import type { AppPrisma } from "../src/infra/prisma.js";
 
 const config: AppConfig = {
   NODE_ENV: "test",

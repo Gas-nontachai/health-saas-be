@@ -619,6 +619,8 @@ FE should treat these permissions as UX hints only. Backend guards remain the so
 
 #### `GET /dashboard`
 
+ดึง dashboard widgets แบบ legacy สำหรับ blood sugar เท่านั้น — FE ใหม่ควรใช้ `GET /health/dashboard` เป็น canonical endpoint เพราะรองรับหลาย health data types และ widget preferences แบบแยก data type
+
 ดึง dashboard widgets — FE เลือกได้ว่าจะแสดง widget ไหนบ้าง ถ้าข้อมูลไม่เพียงพอ widget จะบอก status `"insufficient_data"` พร้อม message
 
 > `bloodSugar: 0` หมายถึงไม่ได้เจาะตรวจ และจะไม่ถูกนำไปคำนวณ widget ที่เป็นค่าสถิติน้ำตาลจริง เช่น avg/min/max, trend, time in range, distribution, daily pattern, weekly average, med comparison, recent alerts และ period comparison แต่ยังนับใน widget ที่เป็นพฤติกรรมการบันทึก/ยา เช่น `loggingStreak` และ `medAdherence`
@@ -844,7 +846,7 @@ Canonical health APIs live under `/health`. Legacy endpoints such as `/records`,
 
 #### `GET /health/dashboard`
 
-Unified dashboard endpoint. FE selects included health data with `dataTypes`.
+Preferred unified dashboard endpoint. FE selects included health data with `dataTypes` and selected cards/charts with `widgets`. Response separates widget payloads by health data type so the same endpoint can power blood sugar only, weight only, or combined dashboards.
 
 **Headers:** `Authorization: Bearer <token>`
 
@@ -856,6 +858,16 @@ Unified dashboard endpoint. FE selects included health data with `dataTypes`.
 |---|---|---|---|---|
 | `range` | `string` | ❌ | `30d` | `7d`, `30d`, `all` |
 | `dataTypes` | `string` | ❌ | `bloodSugar` | comma-separated: `bloodSugar`, `weight`, or `bloodSugar,weight` |
+| `widgets` | `string` | ❌ | defaults per data type | comma-separated widget keys; each selected data type receives the requested widgets it supports |
+
+**Widget keys by data type**
+
+| Data Type | Available Widgets | Default Widgets |
+|---|---|---|
+| `bloodSugar` | `summary`, `trend`, `timeInRange`, `distribution`, `dailyPattern`, `weeklyAverage`, `medAdherence`, `medComparison`, `loggingStreak`, `recentAlerts`, `periodComparison` | `summary`, `trend`, `timeInRange`, `distribution`, `dailyPattern`, `medAdherence`, `recentAlerts` |
+| `weight` | `summary`, `trend`, `forecast`, `goalProgress` | `summary`, `trend`, `forecast` |
+
+If `widgets` contains a key unsupported by every selected data type, the API returns `400`. Example: `dataTypes=bloodSugar&widgets=forecast` is invalid. Example: `dataTypes=bloodSugar,weight&widgets=summary,trend,forecast` is valid; `forecast` is applied to `weight` only.
 
 **Response shape**
 
@@ -863,22 +875,69 @@ Unified dashboard endpoint. FE selects included health data with `dataTypes`.
 {
   "range": "30d",
   "dataTypes": ["bloodSugar", "weight"],
-  "summary": {
-    "bloodSugar": { "status": "ok", "data": {} },
-    "weight": { "status": "ok", "data": {} }
+  "availableDataTypes": ["bloodSugar", "weight"],
+  "availableWidgets": {
+    "bloodSugar": ["summary", "trend", "timeInRange", "distribution", "dailyPattern", "weeklyAverage", "medAdherence", "medComparison", "loggingStreak", "recentAlerts", "periodComparison"],
+    "weight": ["summary", "trend", "forecast", "goalProgress"]
   },
-  "series": {
-    "bloodSugar": [],
-    "weight": []
+  "defaultWidgets": {
+    "bloodSugar": ["summary", "trend", "timeInRange", "distribution", "dailyPattern", "medAdherence", "recentAlerts"],
+    "weight": ["summary", "trend", "forecast"]
   },
-  "alerts": {
-    "bloodSugar": []
-  },
-  "forecast": {
-    "weight": {}
+  "widgets": {
+    "bloodSugar": {
+      "summary": { "status": "ok", "data": { "avg": 126, "min": 90, "max": 200, "count": 42 } },
+      "trend": { "status": "ok", "data": [{ "datetime": "2026-04-05T03:00:00.000Z", "value": 110 }] }
+    },
+    "weight": {
+      "summary": { "status": "ok", "data": { "currentValue": 150.2, "lowestValue": 149.8, "highestValue": 151 } },
+      "forecast": { "status": "ok", "data": { "status": "on_track", "cards": {}, "series": {} } }
+    }
   }
 }
 ```
+
+Every widget result uses `{ "status": "ok" | "insufficient_data", "message"?: string, "data": ... }`.
+
+#### `GET /health/dashboard/preferences`
+
+ดึง account-level dashboard widget preference ของ user ปัจจุบัน แบบแยกตาม health data type
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permission:** `dashboard.read.self`
+
+**Response** `200 OK`
+
+```json
+{
+  "widgets": {
+    "bloodSugar": ["summary", "trend", "timeInRange"],
+    "weight": ["summary", "trend", "forecast"]
+  }
+}
+```
+
+#### `PUT /health/dashboard/preferences`
+
+บันทึก account-level dashboard widget preference ของ user ปัจจุบัน แบบแยกตาม health data type
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permission:** `dashboard.update.self`
+
+**Body**
+
+```json
+{
+  "widgets": {
+    "bloodSugar": ["summary", "trend", "timeInRange"],
+    "weight": ["summary", "forecast", "goalProgress"]
+  }
+}
+```
+
+`widgets` สามารถส่งบาง data type ได้ ระบบจะ preserve preference ของ data type ที่ไม่ส่งมา และ normalize ให้ `summary` อยู่ลำดับแรกเสมอ
 
 #### `GET /health/export`
 

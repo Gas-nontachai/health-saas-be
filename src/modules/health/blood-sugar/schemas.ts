@@ -1,0 +1,11 @@
+import { z } from "zod";
+import { bloodSugarSchema, idParamsSchema, isoDatetimeSchema } from "../../../common/validation.js";
+import { exportTypeSchema, healthRangeSchema, paginationSchema } from "../overview/schemas.js";
+export const createRecordSchema = z.object({ datetime: isoDatetimeSchema, bloodSugar: bloodSugarSchema, medMorning: z.number().int().nonnegative().optional().nullable(), medEvening: z.number().int().nonnegative().optional().nullable(), note: z.string().max(1000).optional().nullable() });
+export const updateRecordSchema = createRecordSchema.partial().refine((value) => Object.keys(value).length > 0, { message: "At least one field is required" });
+export const dashboardQuerySchema = z.object({ range: healthRangeSchema });
+export const exportQuerySchema = z.object({ type: exportTypeSchema });
+export { idParamsSchema, paginationSchema };
+export type CreateBloodSugarRecordInput = z.infer<typeof createRecordSchema>;
+export type UpdateBloodSugarRecordInput = z.infer<typeof updateRecordSchema>;
+export type PaginationQuery = z.infer<typeof paginationSchema>;

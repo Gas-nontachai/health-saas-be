@@ -1,0 +1,6 @@
+import { normalizeHealthDataTypes } from "../overview/schemas.js";
+import type { HealthDataType } from "../overview/types.js";
+import type { SharedLinkRow, SharedLinkStatus } from "./types.js";
+export function serializeSharedLink(sharedLink: SharedLinkRow, now: Date) { const status = getSharedLinkStatus(sharedLink, now); return { id: sharedLink.id, publicPath: status === "active" && sharedLink.publicToken ? `/shared/${sharedLink.publicToken}` : null, dataStartAt: sharedLink.dataStartAt.toISOString(), dataEndAt: sharedLink.dataEndAt.toISOString(), expiresAt: sharedLink.expiresAt.toISOString(), revokedAt: sharedLink.revokedAt?.toISOString() ?? null, status, dataTypes: getSharedLinkDataTypes(sharedLink.dataTypes), createdAt: sharedLink.createdAt.toISOString() }; }
+export function getSharedLinkStatus(sharedLink: Pick<SharedLinkRow, "expiresAt" | "revokedAt">, now: Date): SharedLinkStatus { if (sharedLink.revokedAt) return "revoked"; if (sharedLink.expiresAt <= now) return "expired"; return "active"; }
+export function getSharedLinkDataTypes(value: unknown): HealthDataType[] { if (!Array.isArray(value)) return ["bloodSugar"]; try { return normalizeHealthDataTypes(value.filter((item): item is string => typeof item === "string")); } catch { return ["bloodSugar"]; } }
