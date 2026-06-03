@@ -2,10 +2,10 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import ExcelJS from "exceljs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
-import type { AppConfig } from "../src/config.js";
-import type { AppPrisma } from "../src/prisma.js";
-import { PERMISSION_CODES } from "../src/rbac/permissions.js";
-import { HttpError } from "../src/shared/errors.js";
+import type { AppConfig } from "../src/config/index.js";
+import type { AppPrisma } from "../src/infra/prisma.js";
+import { PERMISSION_CODES } from "../src/modules/identity/rbac/permissions.js";
+import { HttpError } from "../src/common/errors.js";
 
 const config: AppConfig = {
   NODE_ENV: "test",

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AppPrisma } from "../src/prisma.js";
-import { PERMISSIONS, PERMISSION_CODES } from "../src/rbac/permissions.js";
-import { bootstrapInitialAdmin, syncPermissions } from "../src/rbac/sync.js";
+import type { AppPrisma } from "../src/infra/prisma.js";
+import { PERMISSIONS, PERMISSION_CODES } from "../src/modules/identity/rbac/permissions.js";
+import { bootstrapInitialAdmin, syncPermissions } from "../src/modules/identity/rbac/sync.js";
 
 function mockPrisma(): AppPrisma {
   return {
