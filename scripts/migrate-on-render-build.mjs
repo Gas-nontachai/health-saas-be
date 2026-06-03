@@ -25,7 +25,7 @@ if ((result.status ?? 1) !== 0) {
 
 console.log("Syncing permission catalog.");
 
-const syncResult = spawnSync("node", ["dist/src/rbac/sync-cli.js"], {
+const syncResult = spawnSync("node", ["dist/src/modules/identity/rbac/sync-cli.js"], {
   stdio: "inherit",
   shell: process.platform === "win32"
 });
