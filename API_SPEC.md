@@ -15,6 +15,7 @@ Authorization: Bearer <access_token>
 - Backend verify token ผ่าน Keycloak JWKS endpoint โดยอัตโนมัติ
 - เมื่อ token ถูกต้อง ระบบจะ **upsert user** ในฐานข้อมูลจาก token payload (`sub`, `email`, `name`)
 - ครั้งแรกที่ยิง API ด้วย token ใหม่ ระบบจะสร้าง user + profile ให้เอง
+- ระบบจะโหลด `roles` และ `permissions` จาก App DB เพื่อให้ FE ใช้ซ่อน/โชว์เมนู และ backend ใช้ enforce ทุก protected endpoint
 - หาก token ไม่ถูกต้อง/หมดอายุ จะได้ response `401`
 
 ### FE Integration Flow (สรุป)
@@ -61,6 +62,7 @@ Authorization: Bearer <access_token>
 |---|---|
 | `400` | Validation error (Zod) หรือ Bad request |
 | `401` | Missing / Invalid bearer token |
+| `403` | Permission denied |
 | `404` | Resource not found |
 | `409` | Conflict (e.g. user already exists) |
 | `429` | Rate limit exceeded |
@@ -196,9 +198,18 @@ Authorization: Bearer <access_token>
   "id": "uuid",
   "keycloakId": "keycloak-uuid",
   "email": "user@example.com",
-  "name": "สมชาย"
+  "name": "สมชาย",
+  "roles": ["User"],
+  "permissions": [
+    "auth.read.self",
+    "profile.read.self",
+    "records.read.self",
+    "weights.read.self"
+  ]
 }
 ```
+
+FE should treat these permissions as UX hints only. Backend guards remain the source of truth for authorization.
 
 ---
 
@@ -608,6 +619,8 @@ Authorization: Bearer <access_token>
 
 #### `GET /dashboard`
 
+ดึง dashboard widgets แบบ legacy สำหรับ blood sugar เท่านั้น — FE ใหม่ควรใช้ `GET /health/dashboard` เป็น canonical endpoint เพราะรองรับหลาย health data types และ widget preferences แบบแยก data type
+
 ดึง dashboard widgets — FE เลือกได้ว่าจะแสดง widget ไหนบ้าง ถ้าข้อมูลไม่เพียงพอ widget จะบอก status `"insufficient_data"` พร้อม message
 
 > `bloodSugar: 0` หมายถึงไม่ได้เจาะตรวจ และจะไม่ถูกนำไปคำนวณ widget ที่เป็นค่าสถิติน้ำตาลจริง เช่น avg/min/max, trend, time in range, distribution, daily pattern, weekly average, med comparison, recent alerts และ period comparison แต่ยังนับใน widget ที่เป็นพฤติกรรมการบันทึก/ยา เช่น `loggingStreak` และ `medAdherence`
@@ -820,7 +833,467 @@ Authorization: Bearer <access_token>
 
 ---
 
-### 6. Export
+### 6. Unified Health
+
+Canonical health APIs live under `/health`. Legacy endpoints such as `/records`, `/dashboard`, `/export`, and `/health-progress/*` remain available during migration.
+
+#### Supported Data Types
+
+| Key | Description |
+|---|---|
+| `bloodSugar` | Blood sugar records and summaries |
+| `weight` | Weight entries, goal, forecast, ETA |
+
+#### `GET /health/dashboard`
+
+Preferred unified dashboard endpoint. FE selects included health data with `dataTypes` and selected cards/charts with `widgets`. Response separates widget payloads by health data type so the same endpoint can power blood sugar only, weight only, or combined dashboards.
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permission:** `dashboard.read.self`
+
+**Query Parameters:**
+
+| Param | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `range` | `string` | ❌ | `30d` | `7d`, `30d`, `all` |
+| `dataTypes` | `string` | ❌ | `bloodSugar` | comma-separated: `bloodSugar`, `weight`, or `bloodSugar,weight` |
+| `widgets` | `string` | ❌ | defaults per data type | comma-separated widget keys; each selected data type receives the requested widgets it supports |
+
+**Widget keys by data type**
+
+| Data Type | Available Widgets | Default Widgets |
+|---|---|---|
+| `bloodSugar` | `summary`, `trend`, `timeInRange`, `distribution`, `dailyPattern`, `weeklyAverage`, `medAdherence`, `medComparison`, `loggingStreak`, `recentAlerts`, `periodComparison` | `summary`, `trend`, `timeInRange`, `distribution`, `dailyPattern`, `medAdherence`, `recentAlerts` |
+| `weight` | `summary`, `trend`, `forecast`, `goalProgress` | `summary`, `trend`, `forecast` |
+
+If `widgets` contains a key unsupported by every selected data type, the API returns `400`. Example: `dataTypes=bloodSugar&widgets=forecast` is invalid. Example: `dataTypes=bloodSugar,weight&widgets=summary,trend,forecast` is valid; `forecast` is applied to `weight` only.
+
+**Response shape**
+
+```json
+{
+  "range": "30d",
+  "dataTypes": ["bloodSugar", "weight"],
+  "availableDataTypes": ["bloodSugar", "weight"],
+  "availableWidgets": {
+    "bloodSugar": ["summary", "trend", "timeInRange", "distribution", "dailyPattern", "weeklyAverage", "medAdherence", "medComparison", "loggingStreak", "recentAlerts", "periodComparison"],
+    "weight": ["summary", "trend", "forecast", "goalProgress"]
+  },
+  "defaultWidgets": {
+    "bloodSugar": ["summary", "trend", "timeInRange", "distribution", "dailyPattern", "medAdherence", "recentAlerts"],
+    "weight": ["summary", "trend", "forecast"]
+  },
+  "widgets": {
+    "bloodSugar": {
+      "summary": { "status": "ok", "data": { "avg": 126, "min": 90, "max": 200, "count": 42 } },
+      "trend": { "status": "ok", "data": [{ "datetime": "2026-04-05T03:00:00.000Z", "value": 110 }] }
+    },
+    "weight": {
+      "summary": { "status": "ok", "data": { "currentValue": 150.2, "lowestValue": 149.8, "highestValue": 151 } },
+      "forecast": { "status": "ok", "data": { "status": "on_track", "cards": {}, "series": {} } }
+    }
+  }
+}
+```
+
+Every widget result uses `{ "status": "ok" | "insufficient_data", "message"?: string, "data": ... }`.
+
+#### `GET /health/dashboard/preferences`
+
+ดึง account-level dashboard widget preference ของ user ปัจจุบัน แบบแยกตาม health data type
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permission:** `dashboard.read.self`
+
+**Response** `200 OK`
+
+```json
+{
+  "widgets": {
+    "bloodSugar": ["summary", "trend", "timeInRange"],
+    "weight": ["summary", "trend", "forecast"]
+  }
+}
+```
+
+#### `PUT /health/dashboard/preferences`
+
+บันทึก account-level dashboard widget preference ของ user ปัจจุบัน แบบแยกตาม health data type
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permission:** `dashboard.update.self`
+
+**Body**
+
+```json
+{
+  "widgets": {
+    "bloodSugar": ["summary", "trend", "timeInRange"],
+    "weight": ["summary", "forecast", "goalProgress"]
+  }
+}
+```
+
+`widgets` สามารถส่งบาง data type ได้ ระบบจะ preserve preference ของ data type ที่ไม่ส่งมา และ normalize ให้ `summary` อยู่ลำดับแรกเสมอ
+
+#### `GET /health/export`
+
+Unified export endpoint. FE selects report sections with `dataTypes`.
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permissions:** `export.read.self`; additionally `weights.read.self` when `dataTypes` includes `weight`
+
+**Query Parameters:**
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `type` | `string` | ✅ | `excel`, `pdf` |
+| `dataTypes` | `string` | ❌ | comma-separated; default `bloodSugar` |
+
+**Filenames:**
+- `bloodSugar` only: `blood-sugar-records.xlsx` / `blood-sugar-records.pdf`
+- `weight` only: `weight-progress-report.xlsx` / `weight-progress-report.pdf`
+- both: `health-report.xlsx` / `health-report.pdf`
+
+#### Blood Sugar Canonical Endpoints
+
+| Endpoint | Description |
+|---|---|
+| `GET /health/blood-sugar/entries` | Alias-compatible list of blood sugar records |
+| `POST /health/blood-sugar/entries` | Create blood sugar record |
+| `PUT /health/blood-sugar/entries/:id` | Update blood sugar record |
+| `DELETE /health/blood-sugar/entries/:id` | Delete blood sugar record |
+| `GET /health/blood-sugar/dashboard?range=7d\|30d\|all` | Blood-sugar dashboard data |
+| `GET /health/blood-sugar/export?type=excel\|pdf` | Blood-sugar export |
+
+#### Weight Canonical Endpoints
+
+| Endpoint | Description |
+|---|---|
+| `PUT /health/weight/entries/:date` | Upsert daily weight entry |
+| `GET /health/weight/entries` | List weight entries |
+| `DELETE /health/weight/entries/:date` | Delete weight entry |
+| `GET /health/weight/goal` | Get active weight goal |
+| `PUT /health/weight/goal` | Create/replace active weight goal |
+| `GET /health/weight/forecast?range=7d\|30d\|all` | Forecast vs Actual |
+| `GET /health/weight/dashboard?range=7d\|30d\|all` | Weight dashboard data |
+| `GET /health/weight/export?type=excel\|pdf` | Weight progress export |
+
+Successful weight entry upserts also sync `Profile.weight` to the value of the user's latest dated `weight_kg` entry. Backdated edits do not replace the profile weight when a newer weight entry already exists.
+
+### 6.1 Health Progress Forecast (Deprecated Alias)
+
+Progress Forecast เป็น feature หลักสำหรับเทียบ **Forecast vs Actual** ของ health metric โดย MVP รองรับ metric แรกคือ `weight_kg`
+
+> Deprecated: use `/health/weight/*` canonical endpoints for new FE work.
+
+> `Profile.weight` ยังใช้สำหรับ BMI/export เดิมเท่านั้น ไม่ใช่ source ของ forecast calculations
+
+#### `PUT /health-progress/metrics/weight/:date`
+
+เพิ่มหรือแก้ไขน้ำหนักรายวัน 1 ค่า ต่อ 1 calendar date
+
+เมื่อบันทึกสำเร็จ ระบบจะ sync `Profile.weight` เป็นค่าน้ำหนักของ `weight_kg` entry วันที่ล่าสุดของ user เสมอ ถ้าแก้ข้อมูลย้อนหลังและมี entry วันที่ใหม่กว่าอยู่แล้ว profile จะยังใช้ค่าน้ำหนักจากวันที่ใหม่กว่า
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permission:** `weights.update.self`
+
+**Path Params:**
+
+| Param | Type | Required | Validation |
+|---|---|---|---|
+| `date` | `string` | ✅ | `YYYY-MM-DD` |
+
+**Request Body**
+
+```json
+{
+  "value": 150.2
+}
+```
+
+**Response** `200 OK`
+
+```json
+{
+  "id": "uuid",
+  "metricType": "weight_kg",
+  "date": "2026-06-02",
+  "value": 150.2,
+  "createdAt": "2026-06-02T00:00:00.000Z",
+  "updatedAt": "2026-06-02T00:00:00.000Z"
+}
+```
+
+#### `GET /health-progress/metrics/weight`
+
+ดึง raw weight inputs สำหรับหน้า edit/history
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permission:** `weights.read.self`
+
+**Query Parameters:**
+
+| Param | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `from` | `string` | ❌ | - | `YYYY-MM-DD` |
+| `to` | `string` | ❌ | - | `YYYY-MM-DD` |
+| `cursor` | `string` | ❌ | - | pagination cursor |
+| `limit` | `number` | ❌ | `20` | 1-100 |
+
+**Response** `200 OK`
+
+```json
+{
+  "data": [
+    {
+      "id": "uuid",
+      "metricType": "weight_kg",
+      "date": "2026-06-02",
+      "value": 150.2,
+      "createdAt": "2026-06-02T00:00:00.000Z",
+      "updatedAt": "2026-06-02T00:00:00.000Z"
+    }
+  ],
+  "nextCursor": null,
+  "totalCount": 1
+}
+```
+
+#### `DELETE /health-progress/metrics/weight/:date`
+
+ลบ weight input ของวันที่ระบุ
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permission:** `weights.delete.self`
+
+**Response** `204 No Content`
+
+#### `GET /health-progress/goals/weight`
+
+ดึง active weight goal ปัจจุบันของ user หรือ `null`
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permission:** `weights.read.self`
+
+**Response** `200 OK`
+
+```json
+{
+  "id": "uuid",
+  "metricType": "weight_kg",
+  "startDate": "2026-06-02",
+  "targetDate": "2026-12-31",
+  "startValue": 150,
+  "targetValue": 130,
+  "createdAt": "2026-06-02T00:00:00.000Z",
+  "updatedAt": "2026-06-02T00:00:00.000Z"
+}
+```
+
+#### `PUT /health-progress/goals/weight`
+
+สร้างหรือแทนที่ active weight goal ของ user
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permission:** `weights.update.self`
+
+**Request Body**
+
+```json
+{
+  "startValue": 150,
+  "targetValue": 130,
+  "startDate": "2026-06-02",
+  "targetDate": "2026-12-31"
+}
+```
+
+**Validation:**
+- `targetDate` ต้องอยู่หลัง `startDate`
+- `targetValue` ต้องไม่เท่ากับ `startValue`
+- ทุก date ใช้ format `YYYY-MM-DD`
+
+**Response** `200 OK`
+
+```json
+{
+  "id": "uuid",
+  "metricType": "weight_kg",
+  "startDate": "2026-06-02",
+  "targetDate": "2026-12-31",
+  "startValue": 150,
+  "targetValue": 130,
+  "createdAt": "2026-06-02T00:00:00.000Z",
+  "updatedAt": "2026-06-02T00:00:00.000Z"
+}
+```
+
+#### `GET /health-progress/forecast/weight`
+
+Main dashboard endpoint สำหรับ Forecast vs Actual
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permission:** `weights.read.self`
+
+**Query Parameters:**
+
+| Param | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `range` | `string` | ❌ | `30d` | `7d`, `30d`, `all` |
+
+**Status Rules:**
+- `ahead` — actual ดีกว่า forecast อย่างน้อย `0.5 kg`
+- `on_track` — actual อยู่ในช่วง `±0.5 kg` จาก forecast
+- `behind` — actual แย่กว่า forecast มากกว่า `0.5 kg`
+- `insufficient_data` — ยังไม่มี goal หรือยังไม่มี actual entry
+
+**Response** `200 OK`
+
+```json
+{
+  "range": "30d",
+  "metricType": "weight_kg",
+  "status": "on_track",
+  "goal": {
+    "id": "uuid",
+    "metricType": "weight_kg",
+    "startDate": "2026-06-02",
+    "targetDate": "2026-12-31",
+    "startValue": 150,
+    "targetValue": 130,
+    "createdAt": "2026-06-02T00:00:00.000Z",
+    "updatedAt": "2026-06-02T00:00:00.000Z"
+  },
+  "cards": {
+    "currentValue": 150.2,
+    "lowestValue": 149.8,
+    "highestValue": 151,
+    "totalChange": -0.8,
+    "trendKgPerWeek": -0.7,
+    "eta": {
+      "status": "ok",
+      "daysRemaining": 210,
+      "weeksRemaining": 30,
+      "estimatedDate": "2027-01-15"
+    },
+    "targetProgress": {
+      "percent": 4,
+      "remainingValue": -19.2
+    },
+    "forecastComparison": {
+      "date": "2026-06-10",
+      "forecastValue": 149.3,
+      "delta": 0.9
+    }
+  },
+  "series": {
+    "actual": [
+      { "date": "2026-06-02", "value": 150.2 }
+    ],
+    "rollingAverage": [
+      { "date": "2026-06-02", "value": 150.2 }
+    ],
+    "forecast": [
+      { "date": "2026-06-02", "value": 150 },
+      { "date": "2026-12-31", "value": 130 }
+    ]
+  }
+}
+```
+
+**Insufficient Data Response**
+
+```json
+{
+  "range": "30d",
+  "metricType": "weight_kg",
+  "status": "insufficient_data",
+  "message": "Weight goal is required to calculate forecast",
+  "goal": null,
+  "cards": null,
+  "series": {
+    "actual": [],
+    "rollingAverage": [],
+    "forecast": []
+  }
+}
+```
+
+#### `GET /health-progress/export/weight`
+
+Export Weight Progress Report เป็น Excel หรือ PDF โดยเน้น Forecast vs Actual, trend, ETA, goal progress และ daily weight log
+
+**Headers:** `Authorization: Bearer <token>`
+
+**Permissions:** ต้องมีทั้ง `export.read.self` และ `weights.read.self`
+
+**Query Parameters:**
+
+| Param | Type | Required | Description |
+|---|---|---|---|
+| `type` | `string` | ✅ | `excel`, `pdf` |
+
+**Data Rules:**
+- export weight entries ของ user ปัจจุบัน เฉพาะ `metricType = "weight_kg"`
+- เรียงตาม date ASC
+- จำกัดสูงสุด 1,000 entries
+- ถ้าไม่มี goal จะยัง export raw weight log ได้ แต่ forecast fields เป็น `insufficient_data`
+- ถ้าไม่มี entries จะยังได้ report ที่ valid พร้อมข้อความ `No weight entries found.`
+
+**Response (Excel)** `200 OK`
+
+```
+Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+Content-Disposition: attachment; filename="weight-progress-report.xlsx"
+```
+
+Body: binary Excel file — มี 2 sheets:
+
+**Sheet 1: Summary**
+
+| Row | Description |
+|---|---|
+| Patient Name | ชื่อผู้ใช้ |
+| Email | อีเมล |
+| Export Date | วันที่ export |
+| Report Period | ช่วงวันที่ของ weight entries |
+| Goal | start date/value, target date/value, target change |
+| Progress | status, current/lowest/highest weight, total change, trend, ETA, progress %, forecast comparison |
+
+**Sheet 2: Weight Log**
+
+| Column | Description |
+|---|---|
+| # | ลำดับ |
+| Date | วันที่ (YYYY-MM-DD) |
+| Weight (kg) | น้ำหนักที่บันทึก |
+| 7-Day Average | rolling average จาก entries ที่มี |
+| Forecast (kg) | forecast value ของวันนั้น ถ้ามี goal |
+| Delta vs Forecast | actual - forecast ถ้ามี goal |
+
+**Response (PDF)** `200 OK`
+
+```
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="weight-progress-report.pdf"
+```
+
+Body: binary PDF file (A4 portrait) — มี patient header, goal/progress summary, daily weight table และ page footer
+
+---
+
+### 7. Export
 
 #### `GET /export`
 
@@ -897,18 +1370,19 @@ Body: binary PDF file (A4 landscape) — มี header ข้อมูลผู�
 
 ---
 
-### 7. Shared Links
+### 8. Shared Links
 
 #### `POST /shared-links`
 
-สร้าง public link สำหรับแชร์ข้อมูลน้ำตาลและยาให้แพทย์ดูโดยไม่ต้อง login
+สร้าง public link สำหรับแชร์ข้อมูลสุขภาพที่เลือกให้แพทย์ดูโดยไม่ต้อง login
 
 **Headers:** `Authorization: Bearer <token>`
 
 **Rules:**
 - ช่วงข้อมูลที่แชร์ได้สูงสุด 90 วัน
 - อายุลิงก์เลือกได้ `1`, `3`, `7`, `30` วัน
-- ถ้าช่วงที่เลือกมี records เกิน 1,000 รายการ จะไม่สร้างลิงก์และตอบ `400`
+- ถ้าช่วงที่เลือกมี records/entries รวมกันเกิน 1,000 รายการ จะไม่สร้างลิงก์และตอบ `400`
+- `dataTypes` รองรับ `bloodSugar`, `weight`; ถ้าไม่ส่งจะ default เป็น `["bloodSugar"]`
 - backend เก็บ token hash สำหรับ public lookup และเก็บ public token เพื่อให้ history สร้าง `publicPath` ได้
 
 **Request**
@@ -917,7 +1391,8 @@ Body: binary PDF file (A4 landscape) — มี header ข้อมูลผู�
 {
   "startDate": "2026-05-01T00:00:00.000Z",
   "endDate": "2026-05-31T23:59:59.999Z",
-  "expiresInDays": 7
+  "expiresInDays": 7,
+  "dataTypes": ["bloodSugar", "weight"]
 }
 ```
 
@@ -930,6 +1405,7 @@ Body: binary PDF file (A4 landscape) — มี header ข้อมูลผู�
   "token": "abc123",
   "dataStartAt": "2026-05-01T00:00:00.000Z",
   "dataEndAt": "2026-05-31T23:59:59.999Z",
+  "dataTypes": ["bloodSugar", "weight"],
   "expiresAt": "2026-06-07T00:00:00.000Z",
   "revokedAt": null,
   "status": "active",
@@ -953,6 +1429,7 @@ Body: binary PDF file (A4 landscape) — มี header ข้อมูลผู�
       "publicPath": "/shared/abc123",
       "dataStartAt": "2026-05-01T00:00:00.000Z",
       "dataEndAt": "2026-05-31T23:59:59.999Z",
+      "dataTypes": ["bloodSugar"],
       "expiresAt": "2026-06-07T00:00:00.000Z",
       "revokedAt": null,
       "status": "active",
@@ -977,6 +1454,7 @@ Body: binary PDF file (A4 landscape) — มี header ข้อมูลผู�
   "id": "22222222-2222-4222-8222-222222222222",
   "dataStartAt": "2026-05-01T00:00:00.000Z",
   "dataEndAt": "2026-05-31T23:59:59.999Z",
+  "dataTypes": ["bloodSugar"],
   "expiresAt": "2026-06-07T00:00:00.000Z",
   "revokedAt": "2026-05-08T12:00:00.000Z",
   "status": "revoked",
@@ -1002,7 +1480,29 @@ Public endpoint สำหรับหน้า `/shared/{token}` ไม่ต้
     "dataStartAt": "2026-05-01T00:00:00.000Z",
     "dataEndAt": "2026-05-31T23:59:59.999Z",
     "expiresAt": "2026-06-07T00:00:00.000Z",
-    "status": "active"
+    "status": "active",
+    "dataTypes": ["bloodSugar", "weight"]
+  },
+  "data": {
+    "bloodSugar": {
+      "records": [
+        {
+          "datetime": "2026-05-02T10:00:00.000Z",
+          "bloodSugar": 120,
+          "medMorning": 1,
+          "medEvening": null,
+          "note": "before breakfast"
+        }
+      ],
+      "summary": { "status": "ok", "data": {} }
+    },
+    "weight": {
+      "entries": [
+        { "date": "2026-05-02", "value": 150.2 }
+      ],
+      "goal": null,
+      "forecastSummary": { "status": "insufficient_data" }
+    }
   },
   "records": [
     {
@@ -1021,8 +1521,236 @@ Public endpoint สำหรับหน้า `/shared/{token}` ไม่ต้
 }
 ```
 
+> `records` top-level เป็น legacy compatibility สำหรับ blood-sugar links; FE ใหม่ควรอ่านจาก `data.bloodSugar.records`
+
 **Errors:**
 - `404` ถ้า token ไม่พบ, หมดอายุ, หรือถูก revoke
+
+---
+
+### 9. Backoffice RBAC
+
+ทุก endpoint ในหมวดนี้ต้อง authentication และต้องมี permission ที่ระบุไว้ ถ้าไม่มีสิทธิ์จะได้ `403 Permission denied`.
+
+#### `GET /backoffice/permissions`
+
+ดึง fixed permission catalog สำหรับหน้า role management
+
+**Required permission:** `roles.read.system`
+
+**Response** `200 OK`
+
+```json
+{
+  "data": [
+    {
+      "code": "records.read.self",
+      "category": "records",
+      "categoryLabel": "Records",
+      "action": "read",
+      "scope": "self",
+      "label": "View own records"
+    },
+    {
+      "code": "weights.read.self",
+      "category": "weights",
+      "categoryLabel": "Weight Tracking",
+      "action": "read",
+      "scope": "self",
+      "label": "View own weight entries"
+    }
+  ]
+}
+```
+
+#### `GET /backoffice/roles`
+
+ดึง role ทั้งหมดพร้อม permissions
+
+**Required permission:** `roles.read.system`
+
+**Response** `200 OK`
+
+```json
+{
+  "data": [
+    {
+      "id": "uuid",
+      "name": "Admin",
+      "description": "System administrator",
+      "isSystem": true,
+      "isActive": true,
+      "permissions": [
+        {
+          "id": "uuid",
+          "code": "roles.update.system",
+          "category": "roles",
+          "categoryLabel": "Roles",
+          "action": "update",
+          "scope": "system",
+          "label": "Update roles"
+        }
+      ],
+      "createdAt": "2026-06-02T00:00:00.000Z",
+      "updatedAt": "2026-06-02T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+#### `POST /backoffice/roles`
+
+สร้าง role ใหม่และเลือก permission ให้ role
+
+**Required permission:** `roles.create.system`
+
+**Request Body:**
+
+| Field | Type | Required | Validation |
+|---|---|---|---|
+| `name` | `string` | ✅ | min 1, max 100 |
+| `description` | `string \| null` | ❌ | max 500 |
+| `isActive` | `boolean` | ❌ | default `true` |
+| `permissions` | `string[]` | ❌ | ต้องเป็น permission code ที่มีใน catalog |
+
+**Request Body Example:**
+
+```json
+{
+  "name": "Care Team",
+  "description": "Can view patient records",
+  "isActive": true,
+  "permissions": ["records.read.any", "profile.read.any"]
+}
+```
+
+**Response** `201 Created`
+
+คืน role object รูปแบบเดียวกับ `GET /backoffice/roles/:id`
+
+#### `GET /backoffice/roles/:id`
+
+ดู role รายตัว
+
+**Required permission:** `roles.read.system`
+
+**Response** `200 OK`
+
+คืน role object พร้อม permissions
+
+#### `PUT /backoffice/roles/:id`
+
+แก้ไข role และ permission ของ role
+
+**Required permission:** `roles.update.system`
+
+**Request Body:**
+
+| Field | Type | Required | Validation |
+|---|---|---|---|
+| `name` | `string` | ❌ | min 1, max 100 |
+| `description` | `string \| null` | ❌ | max 500 |
+| `isActive` | `boolean` | ❌ | system `Admin` ห้าม deactivate |
+| `permissions` | `string[]` | ❌ | replace permission ทั้งชุดของ role |
+
+**Rules:**
+- system role เปลี่ยนชื่อไม่ได้
+- `Admin` role ต้องคง `roles.update.system` และ `users.assignRoles.system`
+
+#### `DELETE /backoffice/roles/:id`
+
+ลบ role
+
+**Required permission:** `roles.delete.system`
+
+**Response** `204 No Content`
+
+**Rules:**
+- system roles เช่น `Admin`, `User` ลบไม่ได้
+
+#### `GET /backoffice/users`
+
+ดึง users สำหรับหน้า user management
+
+**Required permission:** `users.read.system`
+
+**Query Params:**
+
+| Field | Type | Required | Validation |
+|---|---|---|---|
+| `q` | `string` | ❌ | search email/name, min 1, max 100 |
+| `limit` | `number` | ❌ | min 1, max 100, default 50 |
+
+**Response** `200 OK`
+
+```json
+{
+  "data": [
+    {
+      "id": "uuid",
+      "keycloakId": "keycloak-uuid",
+      "email": "user@example.com",
+      "name": "สมชาย",
+      "profile": {
+        "id": "uuid",
+        "userId": "uuid",
+        "weight": 70,
+        "height": 170,
+        "createdAt": "2026-06-02T00:00:00.000Z"
+      },
+      "roles": [],
+      "permissions": [],
+      "createdAt": "2026-06-02T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+#### `GET /backoffice/users/:id`
+
+ดู user รายตัวพร้อม profile, roles, permissions
+
+**Required permission:** `users.read.system`
+
+**Response** `200 OK`
+
+คืน user object รูปแบบเดียวกับ `GET /backoffice/users`
+
+#### `PUT /backoffice/users/:id/profile`
+
+แก้ profile/email/name ของ user อื่นจาก backoffice
+
+**Required permission:** `users.update.system`
+
+**Request Body:**
+
+| Field | Type | Required | Validation |
+|---|---|---|---|
+| `firstName` | `string` | ❌ | min 1, max 100 |
+| `lastName` | `string` | ❌ | min 1, max 100 |
+| `email` | `string` | ❌ | valid email |
+| `weight` | `number \| null` | ❌ | positive |
+| `height` | `number \| null` | ❌ | positive |
+
+ถ้าแก้ `firstName`, `lastName`, หรือ `email` backend จะ sync ไป Keycloak ด้วย
+
+#### `PUT /backoffice/users/:id/roles`
+
+replace roles ของ user
+
+**Required permission:** `users.assignRoles.system`
+
+**Request Body:**
+
+```json
+{
+  "roleIds": ["uuid"]
+}
+```
+
+**Rules:**
+- `roleIds` ทุกตัวต้องมีอยู่จริง
+- ห้าม remove `Admin` role จาก admin คนสุดท้าย
 
 ---
 
@@ -1063,6 +1791,36 @@ Public endpoint สำหรับหน้า `/shared/{token}` ไม่ต้
 
 > Index: `(userId, datetime)` บน Record table
 
+### HealthMetricEntry
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `String (UUID)` | Primary key |
+| `userId` | `String` | FK → User (cascade delete) |
+| `metricType` | `String` | health metric key, MVP ใช้ `weight_kg` |
+| `date` | `DateTime` | calendar date ที่บันทึกแบบ date-only UTC |
+| `value` | `Float` | metric value |
+| `createdAt` | `DateTime` | วันที่สร้าง |
+| `updatedAt` | `DateTime` | วันที่แก้ไขล่าสุด |
+
+> Unique: `(userId, metricType, date)`, Index: `(userId, metricType, date)`
+
+### HealthGoal
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `String (UUID)` | Primary key |
+| `userId` | `String` | FK → User (cascade delete) |
+| `metricType` | `String` | health metric key, MVP ใช้ `weight_kg` |
+| `startDate` | `DateTime` | วันที่เริ่ม forecast plan |
+| `targetDate` | `DateTime` | วันที่เป้าหมาย |
+| `startValue` | `Float` | ค่าเริ่มต้นของ goal |
+| `targetValue` | `Float` | ค่าเป้าหมาย |
+| `createdAt` | `DateTime` | วันที่สร้าง |
+| `updatedAt` | `DateTime` | วันที่แก้ไขล่าสุด |
+
+> Unique: `(userId, metricType)`, Index: `(userId, metricType)`
+
 ### PasswordResetOtp
 
 | Field | Type | Description |
@@ -1087,9 +1845,58 @@ Public endpoint สำหรับหน้า `/shared/{token}` ไม่ต้
 | `publicToken` | `String?` | raw opaque token สำหรับสร้าง `publicPath` ใน history (unique, nullable สำหรับ legacy rows) |
 | `dataStartAt` | `DateTime` | เวลาเริ่มต้นของ records ที่แชร์ |
 | `dataEndAt` | `DateTime` | เวลาสิ้นสุดของ records ที่แชร์ |
+| `dataTypes` | `Json` | selected health data types, default `["bloodSugar"]` |
 | `expiresAt` | `DateTime` | วันหมดอายุของลิงก์ |
 | `revokedAt` | `DateTime?` | เวลาที่ยกเลิกลิงก์ก่อนหมดอายุ |
 | `createdAt` | `DateTime` | วันที่สร้าง |
 | `updatedAt` | `DateTime` | วันที่แก้ไขล่าสุด |
 
 > Index: unique `(tokenHash)`, unique `(publicToken)`, `(userId, createdAt)`, `(expiresAt)` บน SharedLink table
+
+### Role
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `String (UUID)` | Primary key |
+| `name` | `String` | ชื่อ role (unique) |
+| `description` | `String?` | คำอธิบาย role |
+| `isSystem` | `Boolean` | system role เช่น `Admin`, `User` |
+| `isActive` | `Boolean` | inactive role จะไม่ให้ permission |
+| `createdAt` | `DateTime` | วันที่สร้าง |
+| `updatedAt` | `DateTime` | วันที่แก้ไขล่าสุด |
+
+### Permission
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `String (UUID)` | Primary key |
+| `code` | `String` | permission code จาก fixed catalog เช่น `records.read.self` (unique) |
+| `category` | `String` | กลุ่ม feature เช่น `records`, `weights` |
+| `categoryLabel` | `String` | label สำหรับแสดงใน backoffice |
+| `action` | `String` | action เช่น `read`, `create`, `update`, `delete` |
+| `scope` | `String` | scope เช่น `self`, `any`, `system` |
+| `label` | `String` | คำอธิบาย permission |
+| `createdAt` | `DateTime` | วันที่สร้าง |
+| `updatedAt` | `DateTime` | วันที่แก้ไขล่าสุด |
+
+> Index: unique `(code)`, `(category)` บน Permission table
+
+### RolePermission
+
+| Field | Type | Description |
+|---|---|---|
+| `roleId` | `String` | FK → Role (cascade delete) |
+| `permissionId` | `String` | FK → Permission (cascade delete) |
+| `createdAt` | `DateTime` | วันที่ assign permission |
+
+> Primary key: `(roleId, permissionId)`
+
+### UserRole
+
+| Field | Type | Description |
+|---|---|---|
+| `userId` | `String` | FK → User (cascade delete) |
+| `roleId` | `String` | FK → Role (cascade delete) |
+| `createdAt` | `DateTime` | วันที่ assign role |
+
+> Primary key: `(userId, roleId)`

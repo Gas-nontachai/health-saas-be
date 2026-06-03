@@ -37,6 +37,11 @@ SMTP_PORT=465
 SMTP_USER=ggasstock@gmail.com
 SMTP_PASSWORD=<google-app-password>
 SMTP_FROM="Health SaaS <ggasstock@gmail.com>"
+
+INITIAL_ADMIN_EMAIL=admin@test.com
+INITIAL_ADMIN_PASSWORD=<first-admin-password>
+INITIAL_ADMIN_BOOTSTRAP_ON_START=true
+RBAC_SYNC_ON_START=true
 ```
 
 ## First Deploy
@@ -45,9 +50,16 @@ Before the first app start, run migrations against the Render database:
 
 ```bash
 npx prisma migrate deploy
+npm run admin:bootstrap
 ```
 
 On Render, this can be run from a one-off shell if available, or from a temporary local command using the Render `DATABASE_URL`.
+
+The app also runs permission sync on start when `RBAC_SYNC_ON_START=true`. Permission sync updates the fixed catalog, grants new permissions to the system `Admin` role, and grants self-service permissions to the system `User` role.
+
+The app creates the initial Keycloak admin user on start when `INITIAL_ADMIN_BOOTSTRAP_ON_START=true` and `INITIAL_ADMIN_EMAIL`/`INITIAL_ADMIN_PASSWORD` are set. It does not reset the password on every restart.
+
+Run `npm run admin:bootstrap` only when you need to create/reset the initial admin manually.
 
 ## Smoke Test
 

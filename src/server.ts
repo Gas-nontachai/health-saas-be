@@ -1,6 +1,6 @@
 import { buildApp } from "./app.js";
-import { loadConfig } from "./config.js";
-import { prisma } from "./prisma.js";
+import { loadConfig } from "./config/index.js";
+import { prisma } from "./infra/prisma.js";
 
 const config = loadConfig();
 const app = await buildApp({ config, prisma });

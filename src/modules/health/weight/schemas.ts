@@ -1,0 +1,11 @@
+import { z } from "zod";
+import { dateOnlyParamSchema, exportTypeSchema, healthRangeSchema, paginationSchema } from "../overview/schemas.js";
+import { toDateOnly } from "./forecast.js";
+export const metricValueSchema = z.object({ value: z.number().positive().max(1000) });
+export const goalBodySchema = z.object({ startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), targetDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), startValue: z.number().positive().max(1000), targetValue: z.number().positive().max(1000) }).refine((value) => toDateOnly(value.targetDate) > toDateOnly(value.startDate), "targetDate must be after startDate").refine((value) => value.targetValue !== value.startValue, "targetValue must be different from startValue");
+export const entryListQuerySchema = paginationSchema.extend({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).refine((value) => !value.from || toDateOnly(value.from).toISOString().startsWith(value.from), "Invalid from").refine((value) => !value.to || toDateOnly(value.to).toISOString().startsWith(value.to), "Invalid to").refine((value) => !value.from || !value.to || toDateOnly(value.to) >= toDateOnly(value.from), { message: "to must be on or after from" });
+export const forecastQuerySchema = z.object({ range: healthRangeSchema });
+export const exportQuerySchema = z.object({ type: exportTypeSchema });
+export { dateOnlyParamSchema };
+export type EntryListQuery = z.infer<typeof entryListQuerySchema>;
+export type GoalBody = z.infer<typeof goalBodySchema>;

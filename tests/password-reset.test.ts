@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { createPasswordResetService } from "../src/auth/password-reset.js";
-import type { AppConfig } from "../src/config.js";
-import type { AppPrisma } from "../src/prisma.js";
+import { createPasswordResetService } from "../src/modules/identity/auth/password-reset.js";
+import type { AppConfig } from "../src/config/index.js";
+import type { AppPrisma } from "../src/infra/prisma.js";
 
 const config: AppConfig = {
   NODE_ENV: "test",
@@ -13,7 +13,9 @@ const config: AppConfig = {
   KEYCLOAK_ADMIN_USERNAME: "admin",
   KEYCLOAK_ADMIN_PASSWORD: "admin",
   KEYCLOAK_JWKS_URL: "http://localhost:8080/realms/blood-sugar/protocol/openid-connect/certs",
-  RESET_OTP_SECRET: "test-reset-otp-secret-that-is-long-enough"
+  RESET_OTP_SECRET: "test-reset-otp-secret-that-is-long-enough",
+  INITIAL_ADMIN_BOOTSTRAP_ON_START: false,
+  RBAC_SYNC_ON_START: false
 };
 
 function mockPrisma(): AppPrisma {

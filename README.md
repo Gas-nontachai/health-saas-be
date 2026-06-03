@@ -14,6 +14,7 @@ npm install
 cp .env.example .env
 docker compose up -d
 npx prisma migrate dev
+npm run admin:bootstrap
 npm run dev
 ```
 
@@ -60,6 +61,34 @@ Optional:
 - `SMTP_USER`
 - `SMTP_PASSWORD`
 - `REDIS_URL`
+- `INITIAL_ADMIN_EMAIL`
+- `INITIAL_ADMIN_PASSWORD`
+- `INITIAL_ADMIN_BOOTSTRAP_ON_START`
+- `RBAC_SYNC_ON_START`
+
+## Roles and Permissions
+
+RBAC is stored in the app database. Permissions are a fixed code catalog in `src/rbac/permissions.ts`; roles are managed from backoffice APIs.
+
+By default, the backend syncs this catalog on app start when `RBAC_SYNC_ON_START=true`. You can also run the sync manually:
+
+```bash
+npm run permissions:sync
+```
+
+The sync is non-destructive: it creates/updates permission metadata, grants all permissions to the system `Admin` role, and grants only self-service permissions to the system `User` role. Custom roles do not receive new permissions automatically.
+
+When a new self-service feature is added to the catalog, existing users with the system `User` role receive those new self permissions automatically after the next sync.
+
+Set `INITIAL_ADMIN_EMAIL` and `INITIAL_ADMIN_PASSWORD`, then run:
+
+```bash
+npm run admin:bootstrap
+```
+
+When `INITIAL_ADMIN_BOOTSTRAP_ON_START=true`, the app creates the Keycloak admin user if missing and assigns the local `Admin` role on startup. It does not reset the password on every restart.
+
+The bootstrap command creates the Keycloak user if needed, sets the configured password, creates the local app user, and assigns the `Admin` role. Use it when you need to reset the initial admin password manually.
 
 ## API
 
@@ -140,6 +169,16 @@ Routes:
 - `PUT /profile`
 - `GET /dashboard?range=7d|30d|all`
 - `GET /export?type=excel|pdf`
+- `GET /backoffice/permissions`
+- `GET /backoffice/roles`
+- `POST /backoffice/roles`
+- `GET /backoffice/roles/:id`
+- `PUT /backoffice/roles/:id`
+- `DELETE /backoffice/roles/:id`
+- `GET /backoffice/users`
+- `GET /backoffice/users/:id`
+- `PUT /backoffice/users/:id/profile`
+- `PUT /backoffice/users/:id/roles`
 
 Error format:
 
