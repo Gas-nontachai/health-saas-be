@@ -1,6 +1,7 @@
 import type { AppPrisma } from "../../../infra/prisma.js";
 import { getDatetimeFilter, type ProfileRow, type RecordRow } from "./widgets.js";
 import type { WidgetKey } from "./constants.js";
+import type { StoredDashboardWidgets } from "./preferences.js";
 
 const recordSelect = {
   datetime: true,
@@ -17,7 +18,7 @@ export async function findDashboardPreference(prisma: AppPrisma, userId: string)
   });
 }
 
-export async function saveDashboardPreference(prisma: AppPrisma, userId: string, widgets: WidgetKey[]) {
+export async function saveDashboardPreference(prisma: AppPrisma, userId: string, widgets: StoredDashboardWidgets) {
   return prisma.userPreference.upsert({
     where: { userId },
     update: { dashboardWidgets: widgets },

@@ -1,16 +1,18 @@
 import type { AppPrisma } from "../../../infra/prisma.js";
 import { DEFAULT_WIDGETS, WIDGET_KEYS, type WidgetKey } from "./constants.js";
 import { findDashboardData, findDashboardPreference, saveDashboardPreference } from "./repository.js";
-import { buildWidget, normalizeDashboardWidgets, normalizeStoredDashboardWidgets, type WidgetResult } from "./widgets.js";
+import { normalizeLegacyDashboardWidgets, withUpdatedLegacyBloodSugarWidgets } from "./preferences.js";
+import { buildWidget, normalizeDashboardWidgets, type WidgetResult } from "./widgets.js";
 
 export async function getDashboardPreferences(prisma: AppPrisma, userId: string) {
   const preference = await findDashboardPreference(prisma, userId);
-  return { widgets: normalizeStoredDashboardWidgets(preference?.dashboardWidgets) };
+  return { widgets: normalizeLegacyDashboardWidgets(preference?.dashboardWidgets) };
 }
 
 export async function updateDashboardPreferences(prisma: AppPrisma, userId: string, requestedWidgets: WidgetKey[]) {
   const widgets = normalizeDashboardWidgets(requestedWidgets);
-  await saveDashboardPreference(prisma, userId, widgets);
+  const preference = await findDashboardPreference(prisma, userId);
+  await saveDashboardPreference(prisma, userId, withUpdatedLegacyBloodSugarWidgets(preference?.dashboardWidgets, widgets));
   return { widgets };
 }
 
