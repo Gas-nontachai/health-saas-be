@@ -21,6 +21,8 @@ PORT=3000
 
 DATABASE_URL=<runtime-postgres-connection-url>
 DIRECT_URL=<migration-postgres-connection-url>
+OLD_DATABASE_IMPORT_ON_DEPLOY=false
+OLD_DATABASE_URL=<old-render-postgres-connection-url>
 
 JWT_SECRET=<random-secret-at-least-32-characters>
 ACCESS_TOKEN_TTL_SECONDS=900
@@ -60,8 +62,11 @@ node dist/src/server.js
 `npm run deploy:migrate` runs:
 
 - `npx prisma migrate deploy`
+- Old database import when `OLD_DATABASE_IMPORT_ON_DEPLOY=true`
 - RBAC permission sync
 - Keycloak user migration when `KEYCLOAK_USER_MIGRATION_ON_DEPLOY=true`
+
+For the initial Supabase cutover, set `OLD_DATABASE_IMPORT_ON_DEPLOY=true` and `OLD_DATABASE_URL` to the old Render PostgreSQL URL for one deploy. The import maps existing users by `id`, `keycloakId`, or `email`, then copies profile, blood sugar records, weight entries/goals, dashboard preferences, and shared links into Supabase. Turn `OLD_DATABASE_IMPORT_ON_DEPLOY=false` after the import succeeds so future deploys do not keep scanning the old database.
 
 For the initial cutover from Keycloak, set `KEYCLOAK_USER_MIGRATION_ON_DEPLOY=true` while the Keycloak admin API is still reachable. The import is idempotent: it matches by legacy `keycloakId` or email, creates missing local users, assigns the default role/profile, stores a temporary password hash, marks `passwordChangeRequired=true`, and sends the temporary password by SMTP. It does not resend temporary passwords on rerun unless `KEYCLOAK_USER_MIGRATION_FORCE_EMAIL=true`.
 

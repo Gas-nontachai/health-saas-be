@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 
 run("npx", ["prisma", "migrate", "deploy"]);
+run("node", ["dist/src/modules/identity/auth/import-old-database-cli.js"]);
 run("node", ["dist/src/modules/identity/rbac/sync-cli.js"]);
 run("node", ["dist/src/modules/identity/auth/migrate-keycloak-users-cli.js"]);
 
