@@ -65,7 +65,7 @@ node dist/src/server.js
 
 For the initial cutover from Keycloak, set `KEYCLOAK_USER_MIGRATION_ON_DEPLOY=true` while the Keycloak admin API is still reachable. The import is idempotent: it matches by legacy `keycloakId` or email, creates missing local users, assigns the default role/profile, stores a temporary password hash, marks `passwordChangeRequired=true`, and sends the temporary password by SMTP. It does not resend temporary passwords on rerun unless `KEYCLOAK_USER_MIGRATION_FORCE_EMAIL=true`.
 
-The app creates the initial local admin user on start when `INITIAL_ADMIN_BOOTSTRAP_ON_START=true` and `INITIAL_ADMIN_EMAIL`/`INITIAL_ADMIN_PASSWORD` are set. It does not reset the password on every restart.
+The app creates the initial local admin user on start when `INITIAL_ADMIN_BOOTSTRAP_ON_START=true` and `INITIAL_ADMIN_EMAIL`/`INITIAL_ADMIN_PASSWORD` are set. It also resets that admin password to `INITIAL_ADMIN_PASSWORD` on startup, so changing the env value intentionally changes the bootstrap admin login.
 
 Run `npm run admin:bootstrap` only when you need to create/reset the initial admin manually.
 

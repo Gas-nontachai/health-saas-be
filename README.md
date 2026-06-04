@@ -94,7 +94,7 @@ Set `INITIAL_ADMIN_EMAIL` and `INITIAL_ADMIN_PASSWORD`, then run:
 npm run admin:bootstrap
 ```
 
-When `INITIAL_ADMIN_BOOTSTRAP_ON_START=true`, the app creates the local admin user if missing and assigns the `Admin` role on startup. It does not reset the password on every restart.
+When `INITIAL_ADMIN_BOOTSTRAP_ON_START=true`, the app creates the local admin user if missing, assigns the `Admin` role on startup, and resets that admin password to `INITIAL_ADMIN_PASSWORD` so the env value remains authoritative.
 
 The bootstrap command creates or updates the local app user password and assigns the `Admin` role. Use it when you need to reset the initial admin password manually.
 

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AppPrisma } from "../src/infra/prisma.js";
+import { hashPassword, verifyPassword } from "../src/modules/identity/auth/passwords.js";
+import { bootstrapAdminUser } from "../src/modules/identity/rbac/admin-bootstrap.js";
 import { PERMISSIONS, PERMISSION_CODES } from "../src/modules/identity/rbac/permissions.js";
 import { bootstrapInitialAdmin, syncPermissions } from "../src/modules/identity/rbac/sync.js";
 
@@ -63,5 +65,45 @@ describe("rbac sync", () => {
       update: {},
       create: { userId: "user-1", roleId: "role-Admin" }
     });
+  });
+
+  it("resets existing bootstrap admin password to the configured env password", async () => {
+    const oldPasswordHash = await hashPassword("old-password");
+    const prisma = {
+      user: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "admin-1",
+          email: "admin@test.com",
+          passwordHash: oldPasswordHash
+        }),
+        update: vi.fn().mockImplementation(async ({ data }) => ({
+          id: "admin-1",
+          email: "admin@test.com",
+          ...data
+        }))
+      },
+      role: {
+        findUnique: vi.fn().mockResolvedValue({ id: "role-Admin" })
+      },
+      userRole: {
+        upsert: vi.fn()
+      }
+    } as unknown as AppPrisma;
+
+    const result = await bootstrapAdminUser({
+      prisma,
+      email: "ADMIN@test.com",
+      password: "admin1234",
+      resetExistingPassword: true
+    });
+    const updateCall = vi.mocked(prisma.user.update).mock.calls[0][0];
+
+    expect(result).toEqual({ email: "admin@test.com", createdUser: false, resetPassword: true });
+    expect(await verifyPassword("admin1234", updateCall.data.passwordHash)).toBe(true);
+    expect(await verifyPassword("old-password", updateCall.data.passwordHash)).toBe(false);
+    expect(updateCall.data).toEqual(expect.objectContaining({
+      passwordChangeRequired: false,
+      passwordChangedAt: expect.any(Date)
+    }));
   });
 });

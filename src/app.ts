@@ -81,7 +81,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
           prisma,
           email: options.config.INITIAL_ADMIN_EMAIL,
           password: options.config.INITIAL_ADMIN_PASSWORD,
-          resetExistingPassword: false
+          resetExistingPassword: true
         });
       })
     )(options.prisma);
