@@ -8,8 +8,8 @@ import type { BackupLogsQuery } from "./schemas.js";
 import { serializeBackupLog } from "./serializer.js";
 import type { BackupManifest, BackupRunResult, BackupTriggerType } from "./types.js";
 import { createDatabaseWorkbook } from "./excel-dump.js";
-import { uploadBackupZipToGoogleDrive } from "./google-drive.js";
 import { createPostgresDump } from "./sql-dump.js";
+import { uploadBackupZipToSupabaseStorage } from "./supabase-storage.js";
 import { createBackupZip } from "./zip.js";
 
 export type BackupService = {
@@ -18,10 +18,10 @@ export type BackupService = {
 };
 
 export type BackupServiceDependencies = {
-  createSqlDump?: (databaseUrl: string, outputPath: string) => Promise<void>;
+  createSqlDump?: (databaseUrl: string, outputPath: string, options: { pgDumpPath?: string }) => Promise<void>;
   createExcelDump?: (prisma: AppPrisma, outputPath: string) => Promise<void>;
   createZip?: (zipPath: string, files: Array<{ path: string; name: string }>) => Promise<void>;
-  uploadZip?: (zipPath: string, fileName: string) => Promise<string>;
+  uploadZip?: (zipPath: string, fileName: string, context: { backupId: string; backupAt: Date }) => Promise<string | null>;
   now?: () => Date;
 };
 
@@ -31,15 +31,18 @@ export function createBackupService(config: AppConfig, prisma: AppPrisma, depend
   const createZip = dependencies.createZip ?? createBackupZip;
   const uploadZip =
     dependencies.uploadZip ??
-    ((zipPath, fileName) =>
-      uploadBackupZipToGoogleDrive(
+    ((zipPath, fileName, context) =>
+      uploadBackupZipToSupabaseStorage(
         {
-          folderId: requiredConfig(config.GOOGLE_DRIVE_FOLDER_ID, "GOOGLE_DRIVE_FOLDER_ID"),
-          serviceAccountEmail: requiredConfig(config.GOOGLE_SERVICE_ACCOUNT_EMAIL, "GOOGLE_SERVICE_ACCOUNT_EMAIL"),
-          privateKey: requiredConfig(config.GOOGLE_PRIVATE_KEY, "GOOGLE_PRIVATE_KEY")
+          supabaseUrl: requiredConfig(config.SUPABASE_URL, "SUPABASE_URL"),
+          serviceRoleKey: requiredConfig(config.SUPABASE_SERVICE_ROLE_KEY, "SUPABASE_SERVICE_ROLE_KEY"),
+          bucket: requiredConfig(config.SUPABASE_BACKUP_BUCKET, "SUPABASE_BACKUP_BUCKET"),
+          environment: config.BACKUP_ENVIRONMENT
         },
         zipPath,
-        fileName
+        fileName,
+        context.backupId,
+        context.backupAt
       ));
   const now = dependencies.now ?? (() => new Date());
 
@@ -65,7 +68,7 @@ export function createBackupService(config: AppConfig, prisma: AppPrisma, depend
         const manifestFiles: BackupManifest["files"] = [];
 
         if (config.BACKUP_INCLUDE_SQL) {
-          await createSqlDump(config.DATABASE_URL, sqlPath);
+          await createSqlDump(config.DATABASE_URL, sqlPath, { pgDumpPath: config.BACKUP_PG_DUMP_PATH });
           zipFiles.push({ path: sqlPath, name: "database.sql" });
           manifestFiles.push({ name: "database.sql", type: "sql_dump" });
         }
@@ -88,14 +91,14 @@ export function createBackupService(config: AppConfig, prisma: AppPrisma, depend
         zipFiles.push({ path: manifestPath, name: "manifest.json" });
 
         await createZip(zipPath, zipFiles);
-        const googleDriveFileId = await uploadZip(zipPath, fileName);
+        const storageObjectPath = await uploadZip(zipPath, fileName, { backupId: log.id, backupAt: startedAt });
         const zipStats = await stat(zipPath);
 
         await updateBackupLog(prisma, log.id, {
           status: "success",
           fileName,
           fileSize: zipStats.size,
-          googleDriveFileId,
+          storageObjectPath,
           finishedAt: now(),
           errorMessage: null
         });
@@ -136,9 +139,9 @@ function ensureBackupInputs(config: AppConfig): void {
   if (!config.BACKUP_INCLUDE_SQL && !config.BACKUP_INCLUDE_EXCEL) {
     throw new HttpError(500, "At least one backup output must be enabled");
   }
-  requiredConfig(config.GOOGLE_DRIVE_FOLDER_ID, "GOOGLE_DRIVE_FOLDER_ID");
-  requiredConfig(config.GOOGLE_SERVICE_ACCOUNT_EMAIL, "GOOGLE_SERVICE_ACCOUNT_EMAIL");
-  requiredConfig(config.GOOGLE_PRIVATE_KEY, "GOOGLE_PRIVATE_KEY");
+  requiredConfig(config.SUPABASE_URL, "SUPABASE_URL");
+  requiredConfig(config.SUPABASE_SERVICE_ROLE_KEY, "SUPABASE_SERVICE_ROLE_KEY");
+  requiredConfig(config.SUPABASE_BACKUP_BUCKET, "SUPABASE_BACKUP_BUCKET");
 }
 
 function requiredConfig(value: string | undefined, name: string): string {
@@ -154,5 +157,6 @@ function buildBackupFileName(date: Date): string {
 function sanitizeBackupError(error: unknown, config: AppConfig): string {
   const raw = error instanceof Error ? error.message : typeof error === "string" ? error : "Unknown backup error";
   const withoutDatabaseUrl = raw.replaceAll(config.DATABASE_URL, "[DATABASE_URL]");
-  return withoutDatabaseUrl.replace(/\s+/g, " ").trim().slice(0, 500) || "Backup failed";
+  const withoutSupabaseKey = config.SUPABASE_SERVICE_ROLE_KEY ? withoutDatabaseUrl.replaceAll(config.SUPABASE_SERVICE_ROLE_KEY, "[SUPABASE_SERVICE_ROLE_KEY]") : withoutDatabaseUrl;
+  return withoutSupabaseKey.replace(/\s+/g, " ").trim().slice(0, 500) || "Backup failed";
 }

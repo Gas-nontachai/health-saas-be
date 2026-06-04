@@ -1,6 +1,9 @@
 import "dotenv/config";
 import { z } from "zod";
 
+const optionalNonEmptyString = z.preprocess((value) => (value === "" ? undefined : value), z.string().min(1).optional());
+const optionalUrl = z.preprocess((value) => (value === "" ? undefined : value), z.string().url().optional());
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(3000),
@@ -45,6 +48,7 @@ const envSchema = z.object({
   BACKUP_CRON_SECRET: z.string().min(1).optional(),
   BACKUP_TEMP_DIR: z.string().min(1).default("/tmp/backups"),
   BACKUP_ENVIRONMENT: z.string().min(1).default("development"),
+  BACKUP_PG_DUMP_PATH: optionalNonEmptyString,
   BACKUP_INCLUDE_EXCEL: z
     .enum(["true", "false"])
     .default("true")
@@ -53,13 +57,9 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((value) => value === "true"),
-  GOOGLE_DRIVE_FOLDER_ID: z.string().min(1).optional(),
-  GOOGLE_SERVICE_ACCOUNT_EMAIL: z.string().email().optional(),
-  GOOGLE_PRIVATE_KEY: z
-    .string()
-    .min(1)
-    .optional()
-    .transform((value) => value?.replace(/\\n/g, "\n"))
+  SUPABASE_URL: optionalUrl,
+  SUPABASE_SERVICE_ROLE_KEY: optionalNonEmptyString,
+  SUPABASE_BACKUP_BUCKET: optionalNonEmptyString
 });
 
 export type AppConfig = z.infer<typeof envSchema>;

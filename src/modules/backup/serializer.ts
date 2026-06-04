@@ -4,7 +4,7 @@ type BackupLogLike = {
   triggerType: string;
   fileName: string | null;
   fileSize: number | null;
-  googleDriveFileId: string | null;
+  storageObjectPath: string | null;
   startedAt: Date;
   finishedAt: Date | null;
   errorMessage: string | null;
@@ -20,7 +20,7 @@ export function serializeBackupLog(log: BackupLogLike) {
     triggerType: log.triggerType,
     fileName: log.fileName,
     fileSize: log.fileSize,
-    googleDriveFileId: log.googleDriveFileId,
+    storageObjectPath: log.storageObjectPath,
     startedAt: log.startedAt.toISOString(),
     finishedAt: log.finishedAt?.toISOString() ?? null,
     errorMessage: log.errorMessage,

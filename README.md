@@ -26,6 +26,7 @@ Mailpit สำหรับดูอีเมล local จะอยู่ที�
 Backend ออก local JWT เองและเก็บ password hash ใน App DB. ตั้ง `JWT_SECRET` ให้เป็น secret อย่างน้อย 32 characters ใน production.
 
 Keycloak env ใช้เฉพาะช่วง import ผู้ใช้เดิมด้วย `KEYCLOAK_USER_MIGRATION_ON_DEPLOY=true`; runtime auth ไม่ verify token ผ่าน Keycloak แล้ว.
+Production deploy runs database migration, RBAC sync, and optional Keycloak user import through `npm run deploy:migrate` at container startup; `npm run build` does not connect to the database.
 
 ถ้าจะใช้ `/auth/password/forgot/request` ต้องตั้งค่า SMTP และ `RESET_OTP_SECRET` ใน `.env` ด้วย.
 ค่าใน `.env.example` ใช้ Mailpit จาก `docker-compose.yml` ได้ทันทีสำหรับ local development.
@@ -35,6 +36,7 @@ Keycloak env ใช้เฉพาะช่วง import ผู้ใช้เ�
 Required:
 
 - `DATABASE_URL`
+- `DIRECT_URL` for Prisma migrations when runtime uses a pooler connection
 - `JWT_SECRET`
 - `RESET_OTP_SECRET`
 - `SMTP_HOST`
@@ -63,13 +65,14 @@ Optional:
 - `BACKUP_CRON_SECRET`
 - `BACKUP_TEMP_DIR`
 - `BACKUP_ENVIRONMENT`
+- `BACKUP_PG_DUMP_PATH`
 - `BACKUP_INCLUDE_SQL`
 - `BACKUP_INCLUDE_EXCEL`
-- `GOOGLE_DRIVE_FOLDER_ID`
-- `GOOGLE_SERVICE_ACCOUNT_EMAIL`
-- `GOOGLE_PRIVATE_KEY`
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_BACKUP_BUCKET`
 
-Backup Center ต้องมี `pg_dump` ใน runtime และต้องตั้งค่า Google Drive service account env ก่อนเรียก backup จริง. Cron endpoint ใช้ `x-backup-secret` ไม่ใช้ query string.
+Backup Center ต้องมี `pg_dump` ใน runtime ก่อนเรียก backup จริง และต้องตั้งค่า Supabase Storage env ให้ครบเพื่อ upload zip เข้า private bucket. Cron endpoint ใช้ `x-backup-secret` ไม่ใช้ query string. External drive service account env ถูกถอดออกแล้ว; อย่าใส่ private key ของ drive provider ใน env ของระบบนี้.
 
 ## Roles and Permissions
 

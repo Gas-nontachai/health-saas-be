@@ -131,7 +131,7 @@ function getSheetDefinitions(): SheetDefinition[] {
     },
     {
       name: "backup_logs",
-      columns: columns("id", "status", "triggerType", "fileName", "fileSize", "googleDriveFileId", "startedAt", "finishedAt", "errorMessage", "createdBy", "createdAt", "updatedAt"),
+      columns: columns("id", "status", "triggerType", "fileName", "fileSize", "storageObjectPath", "startedAt", "finishedAt", "errorMessage", "createdBy", "createdAt", "updatedAt"),
       loadRows: (prisma) =>
         prisma.backupLog.findMany({
           orderBy: { startedAt: "asc" },
@@ -141,7 +141,7 @@ function getSheetDefinitions(): SheetDefinition[] {
             triggerType: true,
             fileName: true,
             fileSize: true,
-            googleDriveFileId: true,
+            storageObjectPath: true,
             startedAt: true,
             finishedAt: true,
             errorMessage: true,

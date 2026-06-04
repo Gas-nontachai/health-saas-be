@@ -6,7 +6,7 @@ export type BackupLogUpdate = {
   status?: BackupStatus;
   fileName?: string | null;
   fileSize?: number | null;
-  googleDriveFileId?: string | null;
+  storageObjectPath?: string | null;
   finishedAt?: Date | null;
   errorMessage?: string | null;
 };

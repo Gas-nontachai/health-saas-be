@@ -7,10 +7,11 @@
 - Added scheduled backup endpoint `POST /internal/backup/run` protected by `x-backup-secret`.
 - Added backoffice backup endpoints `POST /backoffice/backups/run` and `GET /backoffice/backups`.
 - Added `BackupLog` persistence for `running`, `success`, and `failed` backup history.
-- Backup runs create `database.sql`, `database.xlsx`, `manifest.json`, zip the files, upload the zip to a private Google Drive folder, and cleanup temporary files.
+- Backup runs create `database.sql`, `database.xlsx`, `manifest.json`, zip the files, upload the zip to a private Supabase Storage bucket, and cleanup temporary files.
 - Added RBAC permissions `backups.create.system` and `backups.read.system`.
 - Excel backup uses explicit column whitelists and excludes sensitive token/password/secret fields.
 - `GET /backoffice/backups` supports page/limit scroll fetch with `status` and `triggerType` filters.
+- Added optional `BACKUP_PG_DUMP_PATH` so environments can point backup SQL export at an absolute `pg_dump` binary path.
 
 ### Why It Changed
 
@@ -31,9 +32,10 @@ System owners need automated database backup that supports real restore through 
 ### Migration and Compatibility Notes
 
 - Apply Prisma migration `20260607000000_add_backup_logs` before enabling backup APIs.
-- Configure `BACKUP_CRON_SECRET`, `BACKUP_TEMP_DIR`, `BACKUP_ENVIRONMENT`, `GOOGLE_DRIVE_FOLDER_ID`, `GOOGLE_SERVICE_ACCOUNT_EMAIL`, and `GOOGLE_PRIVATE_KEY`.
-- Runtime must include `pg_dump`; container or Render environments may need `postgresql-client`.
-- Google Drive uploads are private by default and no download, restore, retention, encryption, or public-share behavior is included in this MVP.
+- Configure `BACKUP_CRON_SECRET`, `BACKUP_TEMP_DIR`, `BACKUP_ENVIRONMENT`, optional `BACKUP_PG_DUMP_PATH`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `SUPABASE_BACKUP_BUCKET`.
+- Runtime must include `pg_dump`; container or Render environments may need `postgresql-client`. If `pg_dump` is installed outside PATH, set `BACKUP_PG_DUMP_PATH` to its absolute path.
+- External drive backup upload is removed; do not configure drive service account secrets for Backup Center.
+- Supabase Storage bucket must be private. The service role key is backend-only and must never be exposed to frontend clients.
 - Backward compatibility is preserved because backup routes use the existing no-`/api/v1` route style.
 
 ## 2026-06-04 — Local Auth Migration and Force Password Change

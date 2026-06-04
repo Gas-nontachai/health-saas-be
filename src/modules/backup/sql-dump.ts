@@ -1,7 +1,12 @@
 import { spawn } from "node:child_process";
 
-export async function createPostgresDump(databaseUrl: string, outputPath: string): Promise<void> {
-  await runCommand("pg_dump", [databaseUrl, "-f", outputPath]);
+export type PostgresDumpOptions = {
+  pgDumpPath?: string;
+};
+
+export async function createPostgresDump(databaseUrl: string, outputPath: string, options: PostgresDumpOptions = {}): Promise<void> {
+  const command = options.pgDumpPath ?? "pg_dump";
+  await runCommand(command, [databaseUrl, "-f", outputPath]);
 }
 
 function runCommand(command: string, args: string[]): Promise<void> {
@@ -14,6 +19,10 @@ function runCommand(command: string, args: string[]): Promise<void> {
     });
 
     child.on("error", (error) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        reject(new Error(`${command} was not found. Install PostgreSQL client tools or set BACKUP_PG_DUMP_PATH to the absolute pg_dump binary path.`));
+        return;
+      }
       reject(error);
     });
 

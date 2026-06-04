@@ -44,13 +44,14 @@ Backup Center ต้องตั้งค่า env ต่อไปนี้ก�
 | `BACKUP_CRON_SECRET` | ✅ สำหรับ cron | secret สำหรับ `x-backup-secret` |
 | `BACKUP_TEMP_DIR` | ❌ | temp directory, default `/tmp/backups` |
 | `BACKUP_ENVIRONMENT` | ❌ | environment ที่เขียนใน manifest, default `development` |
+| `BACKUP_PG_DUMP_PATH` | ❌ | absolute path ของ `pg_dump`; ถ้าไม่ตั้งค่าจะใช้ `pg_dump` จาก runtime PATH |
 | `BACKUP_INCLUDE_SQL` | ❌ | default `true`; ถ้าเปิดจะสร้าง `database.sql` |
 | `BACKUP_INCLUDE_EXCEL` | ❌ | default `true`; ถ้าเปิดจะสร้าง `database.xlsx` |
-| `GOOGLE_DRIVE_FOLDER_ID` | ✅ สำหรับ backup | private Google Drive folder id |
-| `GOOGLE_SERVICE_ACCOUNT_EMAIL` | ✅ สำหรับ backup | service account email |
-| `GOOGLE_PRIVATE_KEY` | ✅ สำหรับ backup | service account private key, รองรับ `\n` escaped newline |
+| `SUPABASE_URL` | ✅ สำหรับ backup | Supabase project URL เช่น `https://<project-ref>.supabase.co` |
+| `SUPABASE_SERVICE_ROLE_KEY` | ✅ สำหรับ backup | service role key สำหรับ backend upload เข้า private Storage bucket; ห้ามส่งให้ frontend |
+| `SUPABASE_BACKUP_BUCKET` | ✅ สำหรับ backup | private bucket สำหรับเก็บ backup zip |
 
-Runtime ต้องมี `pg_dump` สำหรับ PostgreSQL dump. ถ้า env สำหรับ Google Drive หรือ output ถูกปิดทั้งหมดไม่ครบ ระบบจะสร้าง backup log แล้ว mark เป็น `failed`.
+Runtime ต้องมี `pg_dump` สำหรับ PostgreSQL dump. ถ้า binary ไม่อยู่ใน PATH ให้ตั้ง `BACKUP_PG_DUMP_PATH` เช่น `/opt/homebrew/bin/pg_dump` หรือ `/usr/bin/pg_dump`. ถ้า output ถูกปิดทั้งหมดหรือ Supabase Storage env ไม่ครบ ระบบจะสร้าง backup log แล้ว mark เป็น `failed`.
 
 ---
 
@@ -1834,7 +1835,7 @@ x-backup-secret: <BACKUP_CRON_SECRET>
 **Behavior:**
 - ถ้า secret ไม่ถูกต้อง return `401` และไม่สร้าง backup log
 - ถ้ามี backup log `status = "running"` อยู่แล้ว จะไม่เริ่ม backup ใหม่
-- เมื่อเริ่ม backup แล้ว ระบบจะสร้าง log `running`, สร้างไฟล์ backup, upload ไป Google Drive, แล้ว update log เป็น `success` หรือ `failed`
+- เมื่อเริ่ม backup แล้ว ระบบจะสร้าง log `running`, สร้างไฟล์ backup, upload zip เข้า Supabase Storage, แล้ว update log เป็น `success` หรือ `failed`
 - Response ไม่ expose temp file path หรือ stack trace
 
 **Success Response** `200 OK`
@@ -1922,7 +1923,7 @@ x-backup-secret: <BACKUP_CRON_SECRET>
       "triggerType": "scheduled",
       "fileName": "backup_2026-06-04_0200.zip",
       "fileSize": 1240000,
-      "googleDriveFileId": "1abcxyz",
+      "storageObjectPath": "backups/production/2026/06/backup_001.zip",
       "startedAt": "2026-06-04T02:00:00.000Z",
       "finishedAt": "2026-06-04T02:00:15.000Z",
       "errorMessage": null,
@@ -1939,7 +1940,7 @@ x-backup-secret: <BACKUP_CRON_SECRET>
 
 #### Backup File Contract
 
-ไฟล์ที่ upload ไป Google Drive จะเป็น private `.zip` เท่านั้น และไม่สร้าง public share link โดย default
+ไฟล์ backup เป็น private `.zip` เท่านั้น และไม่สร้าง public share link โดย default. Backend upload เข้า Supabase Storage ด้วย service role key และบันทึก object path ลง backup log.
 
 ```text
 backup_2026-06-04_0200.zip
@@ -2087,7 +2088,7 @@ backup_2026-06-04_0200.zip
 | `triggerType` | `String` | `scheduled` หรือ `manual` |
 | `fileName` | `String?` | ชื่อ zip file ที่สร้าง |
 | `fileSize` | `Int?` | ขนาด zip file เป็น bytes |
-| `googleDriveFileId` | `String?` | Google Drive file id หลัง upload สำเร็จ |
+| `storageObjectPath` | `String?` | path/object key หลัง storage uploader ทำงานสำเร็จ; map กับ column เดิมเพื่อ compatibility |
 | `startedAt` | `DateTime` | เวลาที่เริ่ม backup |
 | `finishedAt` | `DateTime?` | เวลาที่ backup สำเร็จหรือล้มเหลว |
 | `errorMessage` | `String?` | short sanitized error message กรณี failed |

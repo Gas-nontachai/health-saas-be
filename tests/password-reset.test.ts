@@ -19,10 +19,7 @@ const config: AppConfig = {
   BACKUP_TEMP_DIR: "/tmp/backups",
   BACKUP_ENVIRONMENT: "test",
   BACKUP_INCLUDE_EXCEL: true,
-  BACKUP_INCLUDE_SQL: true,
-  GOOGLE_DRIVE_FOLDER_ID: "test-folder",
-  GOOGLE_SERVICE_ACCOUNT_EMAIL: "backup@example.com",
-  GOOGLE_PRIVATE_KEY: "test-private-key"
+  BACKUP_INCLUDE_SQL: true
 };
 
 function mockPrisma(): AppPrisma {

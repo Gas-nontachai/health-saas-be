@@ -5,6 +5,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model User {
@@ -179,7 +180,7 @@ model BackupLog {
   triggerType       String
   fileName          String?
   fileSize          Int?
-  googleDriveFileId String?
+  storageObjectPath String?   @map("googleDriveFileId")
   startedAt         DateTime
   finishedAt        DateTime?
   errorMessage      String?

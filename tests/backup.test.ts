@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { FastifyReply, FastifyRequest } from "fastify";
@@ -9,6 +9,8 @@ import type { AppConfig } from "../src/config/index.js";
 import type { AppPrisma } from "../src/infra/prisma.js";
 import { createDatabaseWorkbook } from "../src/modules/backup/excel-dump.js";
 import { createBackupService, type BackupService } from "../src/modules/backup/service.js";
+import { buildBackupObjectPath, uploadBackupZipToSupabaseStorage } from "../src/modules/backup/supabase-storage.js";
+import { createBackupZip } from "../src/modules/backup/zip.js";
 
 const config: AppConfig = {
   NODE_ENV: "test",
@@ -25,11 +27,12 @@ const config: AppConfig = {
   BACKUP_CRON_SECRET: "test-backup-secret",
   BACKUP_TEMP_DIR: path.join(os.tmpdir(), "health-saas-backup-tests"),
   BACKUP_ENVIRONMENT: "test",
+  BACKUP_PG_DUMP_PATH: "/usr/local/bin/pg_dump",
   BACKUP_INCLUDE_EXCEL: true,
   BACKUP_INCLUDE_SQL: true,
-  GOOGLE_DRIVE_FOLDER_ID: "test-folder",
-  GOOGLE_SERVICE_ACCOUNT_EMAIL: "backup@example.com",
-  GOOGLE_PRIVATE_KEY: "test-private-key"
+  SUPABASE_URL: "https://project-ref.supabase.co",
+  SUPABASE_SERVICE_ROLE_KEY: "test-service-role-key",
+  SUPABASE_BACKUP_BUCKET: "database-backups"
 };
 
 function mockAuth(userId = "admin-1", permissions: string[] = ["backups.read.system", "backups.create.system"]) {
@@ -69,7 +72,7 @@ function mockBackupLog(overrides: Record<string, unknown> = {}) {
     triggerType: "scheduled",
     fileName: null,
     fileSize: null,
-    googleDriveFileId: null,
+    storageObjectPath: null,
     startedAt: now,
     finishedAt: null,
     errorMessage: null,
@@ -186,14 +189,14 @@ describe("backup service", () => {
     await rm(config.BACKUP_TEMP_DIR, { recursive: true, force: true });
   });
 
-  it("creates SQL, Excel, manifest, zip, upload, and success log", async () => {
+  it("creates SQL, Excel, manifest, zip, optional upload, and success log", async () => {
     const prisma = mockPrisma();
     const service = createBackupService(config, prisma, {
       now: () => new Date("2026-06-04T02:00:00.000Z"),
       createSqlDump: vi.fn(async (_databaseUrl, outputPath) => writeFile(outputPath, "-- sql")),
       createExcelDump: vi.fn(async (_prisma, outputPath) => writeFile(outputPath, "excel")),
       createZip: vi.fn(async (zipPath) => writeFile(zipPath, "zip")),
-      uploadZip: vi.fn().mockResolvedValue("drive-file-1")
+      uploadZip: vi.fn().mockResolvedValue("backups/test/backup-001.zip")
     });
 
     const result = await service.runBackup({ triggerType: "scheduled" });
@@ -210,10 +213,48 @@ describe("backup service", () => {
         status: "success",
         fileName: "backup_2026-06-04_0200.zip",
         fileSize: 3,
-        googleDriveFileId: "drive-file-1",
+        storageObjectPath: "backups/test/backup-001.zip",
         errorMessage: null
       })
     });
+  });
+
+  it("passes the configured pg_dump path to SQL dump creation", async () => {
+    const createSqlDump = vi.fn(async (_databaseUrl: string, outputPath: string) => writeFile(outputPath, "-- sql"));
+    const service = createBackupService(config, mockPrisma(), {
+      now: () => new Date("2026-06-04T02:00:00.000Z"),
+      createSqlDump,
+      createExcelDump: vi.fn(async (_prisma, outputPath) => writeFile(outputPath, "excel")),
+      createZip: vi.fn(async (zipPath) => writeFile(zipPath, "zip")),
+      uploadZip: vi.fn().mockResolvedValue("backups/test/backup-001.zip")
+    });
+
+    await service.runBackup({ triggerType: "scheduled" });
+
+    expect(createSqlDump).toHaveBeenCalledWith(
+      config.DATABASE_URL,
+      expect.stringContaining("database.sql"),
+      { pgDumpPath: "/usr/local/bin/pg_dump" }
+    );
+  });
+
+  it("passes backup context to the configured storage uploader", async () => {
+    const uploadZip = vi.fn().mockResolvedValue("backups/test/backup-001.zip");
+    const service = createBackupService(config, mockPrisma(), {
+      now: () => new Date("2026-06-04T02:00:00.000Z"),
+      createSqlDump: vi.fn(async (_databaseUrl, outputPath) => writeFile(outputPath, "-- sql")),
+      createExcelDump: vi.fn(async (_prisma, outputPath) => writeFile(outputPath, "excel")),
+      createZip: vi.fn(async (zipPath) => writeFile(zipPath, "zip")),
+      uploadZip
+    });
+
+    await service.runBackup({ triggerType: "manual", createdBy: "admin-1" });
+
+    expect(uploadZip).toHaveBeenCalledWith(
+      expect.stringContaining("backup_2026-06-04_0200.zip"),
+      "backup_2026-06-04_0200.zip",
+      { backupId: "backup-001", backupAt: new Date("2026-06-04T02:00:00.000Z") }
+    );
   });
 
   it("updates failed logs with sanitized errors", async () => {
@@ -309,6 +350,64 @@ describe("backup Excel dump", () => {
 
     expect(allHeaders).not.toEqual(expect.arrayContaining(["passwordHash", "tokenHash", "publicToken", "otpHash"]));
     expect(workbook.getWorksheet("users")?.getRow(1).values).toContain("email");
+    await rm(tempDir, { recursive: true, force: true });
+  });
+});
+
+describe("backup zip", () => {
+  it("creates a zip with the real archiver runtime export", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "health-saas-backup-zip-"));
+    const inputPath = path.join(tempDir, "manifest.json");
+    const zipPath = path.join(tempDir, "backup.zip");
+
+    await writeFile(inputPath, JSON.stringify({ ok: true }), "utf8");
+    await createBackupZip(zipPath, [{ path: inputPath, name: "manifest.json" }]);
+
+    const zipStats = await stat(zipPath);
+    expect(zipStats.size).toBeGreaterThan(0);
+    await rm(tempDir, { recursive: true, force: true });
+  });
+});
+
+describe("Supabase backup storage", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("builds stable object paths for backup zip uploads", () => {
+    expect(buildBackupObjectPath("local/dev", new Date("2026-06-04T02:00:00.000Z"), "backup/001", "backup.zip")).toBe("backups/local_dev/2026/06/backup_001/backup.zip");
+  });
+
+  it("uploads backup zip files to Supabase Storage", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "health-saas-supabase-storage-"));
+    const zipPath = path.join(tempDir, "backup.zip");
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await writeFile(zipPath, "zip", "utf8");
+    const objectPath = await uploadBackupZipToSupabaseStorage(
+      {
+        supabaseUrl: "https://project-ref.supabase.co",
+        serviceRoleKey: "service-role-key",
+        bucket: "database-backups",
+        environment: "test"
+      },
+      zipPath,
+      "backup.zip",
+      "backup-001",
+      new Date("2026-06-04T02:00:00.000Z")
+    );
+
+    expect(objectPath).toBe("backups/test/2026/06/backup-001/backup.zip");
+    expect(fetchMock).toHaveBeenCalledWith(new URL("https://project-ref.supabase.co/storage/v1/object/database-backups/backups/test/2026/06/backup-001/backup.zip"), expect.objectContaining({
+      method: "POST",
+      headers: expect.objectContaining({
+        apikey: "service-role-key",
+        authorization: "Bearer service-role-key",
+        "content-type": "application/zip",
+        "x-upsert": "false"
+      })
+    }));
     await rm(tempDir, { recursive: true, force: true });
   });
 });

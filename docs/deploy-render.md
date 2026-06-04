@@ -19,15 +19,16 @@ Set these values in the Render web service environment:
 NODE_ENV=production
 PORT=3000
 
-DATABASE_URL=<render-postgres-internal-database-url>
+DATABASE_URL=<runtime-postgres-connection-url>
+DIRECT_URL=<migration-postgres-connection-url>
 
 JWT_SECRET=<random-secret-at-least-32-characters>
 ACCESS_TOKEN_TTL_SECONDS=900
 REFRESH_TOKEN_TTL_SECONDS=2592000
 
-# Optional: only required while importing existing users from Keycloak.
-KEYCLOAK_USER_MIGRATION_ON_DEPLOY=false
-KEYCLOAK_USER_MIGRATION_FORCE_EMAIL=false
+# Required for the initial cutover while importing existing users from Keycloak.
+KEYCLOAK_USER_MIGRATION_ON_DEPLOY=true
+KEYCLOAK_USER_MIGRATION_FORCE_EMAIL=true
 KEYCLOAK_BASE_URL=https://health-saas-auth.duckdns.org
 KEYCLOAK_REALM=blood-sugar-dev
 KEYCLOAK_ADMIN_USERNAME=admin
@@ -49,7 +50,7 @@ RBAC_SYNC_ON_START=true
 
 ## First Deploy
 
-The Docker runtime command runs deploy migrations before starting the server:
+The Docker runtime command runs deploy migrations before starting the server. The build step does not connect to the database:
 
 ```bash
 npm run deploy:migrate
