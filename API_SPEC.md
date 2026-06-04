@@ -6,7 +6,7 @@ Base URL: `http://localhost:3000`
 
 Backend มี auth endpoints ให้ FE เรียกโดยตรง และออก **local JWT** จาก App DB โดยไม่พึ่ง Keycloak runtime
 
-ทุก endpoint (ยกเว้น `GET /health`, `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/password/forgot/*`) ต้องส่ง **Bearer token** ผ่าน header:
+ทุก endpoint (ยกเว้น `GET /health`, `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/password/forgot/*`, และ `POST /internal/backup/run`) ต้องส่ง **Bearer token** ผ่าน header:
 
 ```
 Authorization: Bearer <access_token>
@@ -32,6 +32,25 @@ Authorization: Bearer <access_token>
 ## Rate Limiting
 
 - **100 requests** ต่อ **1 นาที** ต่อ IP
+
+---
+
+## Backup Environment
+
+Backup Center ต้องตั้งค่า env ต่อไปนี้ก่อนเรียก backup จริง:
+
+| Env | Required | Description |
+|---|---:|---|
+| `BACKUP_CRON_SECRET` | ✅ สำหรับ cron | secret สำหรับ `x-backup-secret` |
+| `BACKUP_TEMP_DIR` | ❌ | temp directory, default `/tmp/backups` |
+| `BACKUP_ENVIRONMENT` | ❌ | environment ที่เขียนใน manifest, default `development` |
+| `BACKUP_INCLUDE_SQL` | ❌ | default `true`; ถ้าเปิดจะสร้าง `database.sql` |
+| `BACKUP_INCLUDE_EXCEL` | ❌ | default `true`; ถ้าเปิดจะสร้าง `database.xlsx` |
+| `GOOGLE_DRIVE_FOLDER_ID` | ✅ สำหรับ backup | private Google Drive folder id |
+| `GOOGLE_SERVICE_ACCOUNT_EMAIL` | ✅ สำหรับ backup | service account email |
+| `GOOGLE_PRIVATE_KEY` | ✅ สำหรับ backup | service account private key, รองรับ `\n` escaped newline |
+
+Runtime ต้องมี `pg_dump` สำหรับ PostgreSQL dump. ถ้า env สำหรับ Google Drive หรือ output ถูกปิดทั้งหมดไม่ครบ ระบบจะสร้าง backup log แล้ว mark เป็น `failed`.
 
 ---
 
@@ -1798,6 +1817,162 @@ replace roles ของ user
 
 ---
 
+### 10. Backup Center
+
+Backup Center ใช้สำหรับสร้าง database backup และดูประวัติ backup logs. Backend ใช้ route style เดิมของ repo ไม่มี `/api/v1`.
+
+#### `POST /internal/backup/run`
+
+ให้ cron-job.org เรียกเพื่อเริ่ม scheduled backup
+
+**Authentication:** ไม่ใช้ Bearer token แต่ต้องส่ง header:
+
+```http
+x-backup-secret: <BACKUP_CRON_SECRET>
+```
+
+**Behavior:**
+- ถ้า secret ไม่ถูกต้อง return `401` และไม่สร้าง backup log
+- ถ้ามี backup log `status = "running"` อยู่แล้ว จะไม่เริ่ม backup ใหม่
+- เมื่อเริ่ม backup แล้ว ระบบจะสร้าง log `running`, สร้างไฟล์ backup, upload ไป Google Drive, แล้ว update log เป็น `success` หรือ `failed`
+- Response ไม่ expose temp file path หรือ stack trace
+
+**Success Response** `200 OK`
+
+```json
+{
+  "message": "Backup completed successfully",
+  "backupId": "backup_001",
+  "fileName": "backup_2026-06-04_0200.zip",
+  "status": "success"
+}
+```
+
+**Already Running Response** `200 OK`
+
+```json
+{
+  "message": "Backup is already running",
+  "status": "running"
+}
+```
+
+**Failed Response** `500 Internal Server Error`
+
+```json
+{
+  "message": "Backup failed",
+  "backupId": "backup_001",
+  "status": "failed",
+  "error": "pg_dump failed"
+}
+```
+
+#### `POST /backoffice/backups/run`
+
+ให้ admin กดสร้าง manual backup จาก backoffice
+
+**Required permission:** `backups.create.system`
+
+**Behavior:**
+- ต้อง authentication
+- ใช้ flow เดียวกับ scheduled backup
+- ตั้ง `triggerType = "manual"`
+- บันทึก `createdBy = request.user.id`
+
+**Success Response** `200 OK`
+
+```json
+{
+  "message": "Manual backup completed successfully",
+  "backupId": "backup_002",
+  "fileName": "backup_2026-06-04_1430.zip",
+  "status": "success"
+}
+```
+
+#### `GET /backoffice/backups`
+
+ดึง backup logs สำหรับหน้า Backup Center
+
+**Required permission:** `backups.read.system`
+
+**Query Params:**
+
+| Field | Type | Required | Validation |
+|---|---|---:|---|
+| `page` | `number` | ❌ | min 1, default 1 |
+| `limit` | `number` | ❌ | min 1, max 100, default 20 |
+| `status` | `pending \| running \| success \| failed` | ❌ | filter status |
+| `triggerType` | `scheduled \| manual` | ❌ | filter trigger type |
+
+**Scroll Fetch Contract:**
+- FE ใช้ `page` และ `limit` เพื่อโหลดเพิ่มแบบ infinite scroll
+- โหลดหน้าถัดไปเมื่อ `items.length === limit` และ `page * limit < total`
+- Response มี `total` เพื่อให้ FE รู้ว่ายังมีข้อมูลเหลือหรือไม่
+
+**Response** `200 OK`
+
+```json
+{
+  "items": [
+    {
+      "id": "backup_001",
+      "status": "success",
+      "triggerType": "scheduled",
+      "fileName": "backup_2026-06-04_0200.zip",
+      "fileSize": 1240000,
+      "googleDriveFileId": "1abcxyz",
+      "startedAt": "2026-06-04T02:00:00.000Z",
+      "finishedAt": "2026-06-04T02:00:15.000Z",
+      "errorMessage": null,
+      "createdBy": null,
+      "createdAt": "2026-06-04T02:00:00.000Z",
+      "updatedAt": "2026-06-04T02:00:15.000Z"
+    }
+  ],
+  "page": 1,
+  "limit": 20,
+  "total": 1
+}
+```
+
+#### Backup File Contract
+
+ไฟล์ที่ upload ไป Google Drive จะเป็น private `.zip` เท่านั้น และไม่สร้าง public share link โดย default
+
+```text
+backup_2026-06-04_0200.zip
+├── database.sql
+├── database.xlsx
+└── manifest.json
+```
+
+`manifest.json` example:
+
+```json
+{
+  "backupAt": "2026-06-04T02:00:00.000Z",
+  "environment": "production",
+  "type": "scheduled",
+  "databaseProvider": "postgresql",
+  "files": [
+    { "name": "database.sql", "type": "sql_dump" },
+    { "name": "database.xlsx", "type": "excel_export" }
+  ],
+  "status": "success"
+}
+```
+
+**Excel Export Rules:**
+- 1 table/module ต่อ 1 sheet
+- ใช้ column whitelist เท่านั้น
+- Sheet ที่ไม่มีข้อมูลยังมี header และไม่ throw error
+- ห้าม export sensitive fields เช่น `password`, `passwordHash`, `access_token`, `refresh_token`, `reset_password_token`, `otp`, `otpHash`, `session_token`, `secret_key`, `private_key`, `tokenHash`, `publicToken`, `verification_token`
+- SQL dump เป็น restore artifact จึงอาจมีข้อมูลครบตามฐานข้อมูลจริง
+
+---
+
 ## Data Models (Prisma)
 
 ### User
@@ -1902,6 +2077,25 @@ replace roles ของ user
 | `updatedAt` | `DateTime` | วันที่แก้ไขล่าสุด |
 
 > Index: unique `(tokenHash)`, unique `(publicToken)`, `(userId, createdAt)`, `(expiresAt)` บน SharedLink table
+
+### BackupLog
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `String (UUID)` | Primary key |
+| `status` | `String` | `pending`, `running`, `success`, หรือ `failed` |
+| `triggerType` | `String` | `scheduled` หรือ `manual` |
+| `fileName` | `String?` | ชื่อ zip file ที่สร้าง |
+| `fileSize` | `Int?` | ขนาด zip file เป็น bytes |
+| `googleDriveFileId` | `String?` | Google Drive file id หลัง upload สำเร็จ |
+| `startedAt` | `DateTime` | เวลาที่เริ่ม backup |
+| `finishedAt` | `DateTime?` | เวลาที่ backup สำเร็จหรือล้มเหลว |
+| `errorMessage` | `String?` | short sanitized error message กรณี failed |
+| `createdBy` | `String?` | FK → User สำหรับ manual backup (set null เมื่อ user ถูกลบ) |
+| `createdAt` | `DateTime` | วันที่สร้าง log |
+| `updatedAt` | `DateTime` | วันที่แก้ไขล่าสุด |
+
+> Index: `(status)`, `(triggerType)`, `(startedAt)`, `(createdBy)` บน BackupLog table
 
 ### Role
 

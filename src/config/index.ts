@@ -41,7 +41,25 @@ const envSchema = z.object({
   RBAC_SYNC_ON_START: z
     .enum(["true", "false"])
     .default("true")
-    .transform((value) => value === "true")
+    .transform((value) => value === "true"),
+  BACKUP_CRON_SECRET: z.string().min(1).optional(),
+  BACKUP_TEMP_DIR: z.string().min(1).default("/tmp/backups"),
+  BACKUP_ENVIRONMENT: z.string().min(1).default("development"),
+  BACKUP_INCLUDE_EXCEL: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
+  BACKUP_INCLUDE_SQL: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
+  GOOGLE_DRIVE_FOLDER_ID: z.string().min(1).optional(),
+  GOOGLE_SERVICE_ACCOUNT_EMAIL: z.string().email().optional(),
+  GOOGLE_PRIVATE_KEY: z
+    .string()
+    .min(1)
+    .optional()
+    .transform((value) => value?.replace(/\\n/g, "\n"))
 });
 
 export type AppConfig = z.infer<typeof envSchema>;

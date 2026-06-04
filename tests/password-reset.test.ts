@@ -14,7 +14,15 @@ const config: AppConfig = {
   KEYCLOAK_USER_MIGRATION_FORCE_EMAIL: false,
   RESET_OTP_SECRET: "test-reset-otp-secret-that-is-long-enough",
   INITIAL_ADMIN_BOOTSTRAP_ON_START: false,
-  RBAC_SYNC_ON_START: false
+  RBAC_SYNC_ON_START: false,
+  BACKUP_CRON_SECRET: "test-backup-secret",
+  BACKUP_TEMP_DIR: "/tmp/backups",
+  BACKUP_ENVIRONMENT: "test",
+  BACKUP_INCLUDE_EXCEL: true,
+  BACKUP_INCLUDE_SQL: true,
+  GOOGLE_DRIVE_FOLDER_ID: "test-folder",
+  GOOGLE_SERVICE_ACCOUNT_EMAIL: "backup@example.com",
+  GOOGLE_PRIVATE_KEY: "test-private-key"
 };
 
 function mockPrisma(): AppPrisma {

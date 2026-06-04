@@ -60,6 +60,16 @@ Optional:
 - `INITIAL_ADMIN_PASSWORD`
 - `INITIAL_ADMIN_BOOTSTRAP_ON_START`
 - `RBAC_SYNC_ON_START`
+- `BACKUP_CRON_SECRET`
+- `BACKUP_TEMP_DIR`
+- `BACKUP_ENVIRONMENT`
+- `BACKUP_INCLUDE_SQL`
+- `BACKUP_INCLUDE_EXCEL`
+- `GOOGLE_DRIVE_FOLDER_ID`
+- `GOOGLE_SERVICE_ACCOUNT_EMAIL`
+- `GOOGLE_PRIVATE_KEY`
+
+Backup Center ต้องมี `pg_dump` ใน runtime และต้องตั้งค่า Google Drive service account env ก่อนเรียก backup จริง. Cron endpoint ใช้ `x-backup-secret` ไม่ใช้ query string.
 
 ## Roles and Permissions
 
@@ -174,6 +184,9 @@ Routes:
 - `GET /backoffice/users/:id`
 - `PUT /backoffice/users/:id/profile`
 - `PUT /backoffice/users/:id/roles`
+- `POST /internal/backup/run`
+- `POST /backoffice/backups/run`
+- `GET /backoffice/backups`
 
 Error format:
 

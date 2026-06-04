@@ -62,6 +62,9 @@ export const PERMISSIONS = [
   permission("users", "Users", "update", "system", "Update users"),
   permission("users", "Users", "assignRoles", "system", "Assign user roles"),
 
+  permission("backups", "Backups", "read", "system", "View backup logs"),
+  permission("backups", "Backups", "create", "system", "Run database backups"),
+
   permission("weights", "Weight Tracking", "read", "self", "View own weight entries"),
   permission("weights", "Weight Tracking", "create", "self", "Create own weight entries"),
   permission("weights", "Weight Tracking", "update", "self", "Update own weight entries"),

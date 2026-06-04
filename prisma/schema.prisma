@@ -24,6 +24,7 @@ model User {
   healthMetricEntries HealthMetricEntry[]
   healthGoals         HealthGoal[]
   sharedLinks         SharedLink[]
+  backupLogs          BackupLog[]
   roles               UserRole[]
   createdAt           DateTime            @default(now())
 
@@ -170,4 +171,25 @@ model SharedLink {
 
   @@index([userId, createdAt])
   @@index([expiresAt])
+}
+
+model BackupLog {
+  id                String    @id @default(uuid())
+  status            String
+  triggerType       String
+  fileName          String?
+  fileSize          Int?
+  googleDriveFileId String?
+  startedAt         DateTime
+  finishedAt        DateTime?
+  errorMessage      String?
+  createdBy         String?
+  creator           User?     @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([status])
+  @@index([triggerType])
+  @@index([startedAt])
+  @@index([createdBy])
 }

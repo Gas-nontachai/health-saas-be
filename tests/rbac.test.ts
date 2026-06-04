@@ -39,6 +39,11 @@ describe("rbac sync", () => {
       update: expect.objectContaining({ category: "weights" }),
       create: expect.objectContaining({ code: "weights.read.self" })
     });
+    expect(prisma.permission.upsert).toHaveBeenCalledWith({
+      where: { code: "backups.create.system" },
+      update: expect.objectContaining({ category: "backups" }),
+      create: expect.objectContaining({ code: "backups.create.system" })
+    });
     expect(prisma.rolePermission.createMany).toHaveBeenCalledWith({
       data: PERMISSION_CODES.map((code) => ({
         roleId: "role-Admin",

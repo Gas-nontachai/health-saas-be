@@ -9,6 +9,8 @@ import { createSmtpMailer, type Mailer } from "./modules/identity/auth/mailer.js
 import { createPasswordResetService, type PasswordResetService } from "./modules/identity/auth/password-reset.js";
 import { registerAuthRoutes } from "./modules/identity/auth/routes.js";
 import { registerBackofficeRoutes } from "./modules/backoffice/routes.js";
+import { registerBackupRoutes } from "./modules/backup/routes.js";
+import type { BackupService } from "./modules/backup/service.js";
 import { registerDashboardRoutes } from "./modules/health/dashboard/routes.js";
 import { registerExportRoutes } from "./modules/health/export/routes.js";
 import { registerHealthRoutes } from "./modules/health/overview/routes.js";
@@ -30,6 +32,7 @@ export type BuildAppOptions = {
   localAuth?: LocalAuthService;
   mailer?: Mailer;
   passwordReset?: PasswordResetService;
+  backupService?: BackupService;
   syncPermissions?: (prisma: AppPrisma) => Promise<unknown>;
   syncPermissionsOnStart?: boolean;
   bootstrapInitialAdmin?: (prisma: AppPrisma) => Promise<unknown>;
@@ -99,6 +102,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await registerHealthProgressRoutes(app, options.prisma);
   await registerExportRoutes(app, options.prisma);
   await registerSharedLinkRoutes(app, options.prisma);
+  await registerBackupRoutes(app, options.config, options.prisma, options.backupService);
   await registerBackofficeRoutes(app, options.prisma);
 
   return app;
