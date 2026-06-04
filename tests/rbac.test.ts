@@ -97,10 +97,13 @@ describe("rbac sync", () => {
       resetExistingPassword: true
     });
     const updateCall = vi.mocked(prisma.user.update).mock.calls[0][0];
+    const updatedPasswordHash = updateCall.data.passwordHash;
 
     expect(result).toEqual({ email: "admin@test.com", createdUser: false, resetPassword: true });
-    expect(await verifyPassword("admin1234", updateCall.data.passwordHash)).toBe(true);
-    expect(await verifyPassword("old-password", updateCall.data.passwordHash)).toBe(false);
+    expect(typeof updatedPasswordHash).toBe("string");
+    if (typeof updatedPasswordHash !== "string") throw new Error("Expected bootstrap admin passwordHash to be a string");
+    expect(await verifyPassword("admin1234", updatedPasswordHash)).toBe(true);
+    expect(await verifyPassword("old-password", updatedPasswordHash)).toBe(false);
     expect(updateCall.data).toEqual(expect.objectContaining({
       passwordChangeRequired: false,
       passwordChangedAt: expect.any(Date)
