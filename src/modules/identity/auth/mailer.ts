@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import type SMTPTransport from "nodemailer/lib/smtp-transport/index.js";
 import { HttpError } from "../../../common/errors.js";
 
 export type SmtpMailerConfig = {
@@ -19,7 +20,7 @@ export function createSmtpMailer(config: SmtpMailerConfig): Mailer {
   const sendMail = async (input: { to: string; subject: string; text: string; html: string }) => {
     assertSmtpConfig(config);
 
-    const transporter = nodemailer.createTransport({
+    const transportOptions: SMTPTransport.Options = {
       host: config.SMTP_HOST,
       port: config.SMTP_PORT,
       secure: config.SMTP_PORT === 465,
@@ -33,7 +34,9 @@ export function createSmtpMailer(config: SmtpMailerConfig): Mailer {
               pass: config.SMTP_PASSWORD
             }
           : undefined
-    });
+    };
+    Object.assign(transportOptions, { family: 4 });
+    const transporter = nodemailer.createTransport(transportOptions);
 
     await transporter.sendMail({
       from: config.SMTP_FROM,
