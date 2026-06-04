@@ -9,6 +9,8 @@
     "start": "npm run deploy:migrate && node dist/src/server.js",
     "deploy:migrate": "node scripts/deploy-migrate.mjs",
     "db:copy": "node scripts/copy-postgres-data.mjs",
+    "password:reset-temp": "npx tsx src/modules/identity/auth/reset-temporary-password-cli.ts",
+    "password:reset-non-admins": "npx tsx src/modules/identity/auth/reset-non-admin-passwords-cli.ts",
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "permissions:sync": "npx tsx src/modules/identity/rbac/sync-cli.ts",
