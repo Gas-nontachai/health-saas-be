@@ -9,9 +9,15 @@ datasource db {
 
 model User {
   id                  String              @id @default(uuid())
-  keycloakId          String              @unique
-  email               String
+  keycloakId          String?             @unique
+  email               String              @unique
   name                String?
+  passwordHash        String?
+  passwordChangeRequired Boolean          @default(false)
+  passwordChangedAt   DateTime?
+  migratedFrom        String?
+  migratedAt          DateTime?
+  temporaryPasswordSentAt DateTime?
   profile             Profile?
   preference          UserPreference?
   records             Record[]
@@ -20,6 +26,8 @@ model User {
   sharedLinks         SharedLink[]
   roles               UserRole[]
   createdAt           DateTime            @default(now())
+
+  @@index([email])
 }
 
 model Role {

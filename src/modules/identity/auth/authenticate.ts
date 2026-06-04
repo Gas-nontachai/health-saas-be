@@ -1,20 +1,17 @@
 import type { FastifyReply, FastifyRequest, preHandlerHookHandler } from "fastify";
-import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 import type { AppConfig } from "../../../config/index.js";
 import type { AppPrisma } from "../../../infra/prisma.js";
 import { getUserRolePermissions } from "../rbac/authorize.js";
-import { assignDefaultUserRole, bootstrapInitialAdmin } from "../rbac/sync.js";
 import { HttpError } from "../../../common/errors.js";
+import { verifyLocalToken } from "./local.js";
 
-type KeycloakPayload = JWTPayload & {
-  email?: string;
-  name?: string;
-  preferred_username?: string;
-};
+const PASSWORD_CHANGE_ALLOWED_ROUTES = new Set([
+  "GET /auth/me",
+  "POST /auth/password/change-required",
+  "POST /auth/password/reset"
+]);
 
 export function createAuthenticate(config: AppConfig, prisma: AppPrisma): preHandlerHookHandler {
-  const jwks = createRemoteJWKSet(new URL(config.KEYCLOAK_JWKS_URL));
-
   return async (request: FastifyRequest, _reply: FastifyReply) => {
     const authHeader = request.headers.authorization;
     if (!authHeader?.startsWith("Bearer ")) {
@@ -22,49 +19,27 @@ export function createAuthenticate(config: AppConfig, prisma: AppPrisma): preHan
     }
 
     const token = authHeader.slice("Bearer ".length);
-    let payload: KeycloakPayload;
+    const payload = await verifyLocalToken(config, token, "access");
+    const user = await prisma.user.findUnique({ where: { id: String(payload.sub) } });
+    if (!user) throw new HttpError(401, "Invalid bearer token");
 
-    try {
-      const verified = await jwtVerify(token, jwks, {
-        issuer: config.KEYCLOAK_ISSUER,
-        audience: config.KEYCLOAK_AUDIENCE
-      });
-      payload = verified.payload as KeycloakPayload;
-    } catch {
-      throw new HttpError(401, "Invalid bearer token");
-    }
-
-    if (!payload.sub) {
-      throw new HttpError(401, "Token is missing subject");
-    }
-
-    const email = payload.email ?? `${payload.sub}@keycloak.local`;
-    const name = payload.name ?? payload.preferred_username ?? null;
-
-    const user = await prisma.user.upsert({
-      where: { keycloakId: payload.sub },
-      update: {},
-      create: {
-        keycloakId: payload.sub,
-        email,
-        name,
-        profile: {
-          create: {}
-        }
-      }
-    });
-
-    await assignDefaultUserRole(prisma, user.id);
-    await bootstrapInitialAdmin(prisma, user.id, user.email, config.INITIAL_ADMIN_EMAIL);
     const { roles, permissions } = await getUserRolePermissions(prisma, user.id);
-
     request.user = {
       id: user.id,
       keycloakId: user.keycloakId,
       email: user.email,
       name: user.name,
       roles,
-      permissions
+      permissions,
+      passwordChangeRequired: user.passwordChangeRequired
     };
+
+    if (user.passwordChangeRequired && !isPasswordChangeAllowed(request)) {
+      throw new HttpError(403, "PASSWORD_CHANGE_REQUIRED");
+    }
   };
+}
+
+function isPasswordChangeAllowed(request: FastifyRequest): boolean {
+  return PASSWORD_CHANGE_ALLOWED_ROUTES.has(`${request.method} ${request.routeOptions.url}`);
 }

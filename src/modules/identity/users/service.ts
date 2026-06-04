@@ -1,5 +1,4 @@
 import type { AppPrisma } from "../../../infra/prisma.js";
-import type { KeycloakAuthService } from "../auth/keycloak.js";
 import { findUserEmailName, findUserName, findUserProfileSummary, updateUserIdentity, upsertProfile } from "./repository.js";
 import { serializeProfile } from "./serializer.js";
 import type { UpdateProfileInput } from "./schemas.js";
@@ -9,10 +8,9 @@ export async function getProfile(prisma: AppPrisma, userId: string) {
   return serializeProfile(profile, user);
 }
 
-export async function updateProfile(prisma: AppPrisma, keycloakAuth: KeycloakAuthService, user: { id: string; keycloakId: string }, body: UpdateProfileInput) {
+export async function updateProfile(prisma: AppPrisma, user: { id: string }, body: UpdateProfileInput) {
   const { firstName, lastName, email, ...profileData } = body;
   if (firstName !== undefined || lastName !== undefined || email !== undefined) {
-    await keycloakAuth.updateUser({ keycloakId: user.keycloakId, firstName, lastName, email });
     const updateData: { email?: string; name?: string } = {};
     if (email !== undefined) updateData.email = email;
     if (firstName !== undefined || lastName !== undefined) {

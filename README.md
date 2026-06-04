@@ -1,6 +1,6 @@
 # Blood Sugar Tracking Backend
 
-Backend API สำหรับแอปติดตามระดับน้ำตาลในเลือด ใช้ Fastify, Prisma, PostgreSQL และ Keycloak SSO.
+Backend API สำหรับแอปติดตามระดับน้ำตาลในเลือด ใช้ Fastify, Prisma, PostgreSQL และ local JWT auth.
 
 ## Requirements
 
@@ -21,16 +21,11 @@ npm run dev
 API จะรันที่ `http://localhost:3000`.
 Mailpit สำหรับดูอีเมล local จะอยู่ที่ `http://localhost:8025`.
 
-## Keycloak Setup
+## Auth Setup
 
-ใน realm `blood-sugar` ให้สร้าง client:
+Backend ออก local JWT เองและเก็บ password hash ใน App DB. ตั้ง `JWT_SECRET` ให้เป็น secret อย่างน้อย 32 characters ใน production.
 
-- Client ID: `blood-sugar-api`
-- Client authentication: `Off` สำหรับ public client
-- Standard flow: `On`
-- Direct access grants: `On`
-
-Backend ใช้ admin user จาก env เพื่อสร้าง user ใน Keycloak ผ่าน `/auth/register`. ค่า dev default คือ `admin` / `admin` จาก `docker-compose.yml`.
+Keycloak env ใช้เฉพาะช่วง import ผู้ใช้เดิมด้วย `KEYCLOAK_USER_MIGRATION_ON_DEPLOY=true`; runtime auth ไม่ verify token ผ่าน Keycloak แล้ว.
 
 ถ้าจะใช้ `/auth/password/forgot/request` ต้องตั้งค่า SMTP และ `RESET_OTP_SECRET` ใน `.env` ด้วย.
 ค่าใน `.env.example` ใช้ Mailpit จาก `docker-compose.yml` ได้ทันทีสำหรับ local development.
@@ -40,12 +35,7 @@ Backend ใช้ admin user จาก env เพื่อสร้าง user �
 Required:
 
 - `DATABASE_URL`
-- `KEYCLOAK_BASE_URL`
-- `KEYCLOAK_REALM`
-- `KEYCLOAK_CLIENT_ID`
-- `KEYCLOAK_ADMIN_USERNAME`
-- `KEYCLOAK_ADMIN_PASSWORD`
-- `KEYCLOAK_JWKS_URL`
+- `JWT_SECRET`
 - `RESET_OTP_SECRET`
 - `SMTP_HOST`
 - `SMTP_PORT`
@@ -55,9 +45,14 @@ Required:
 
 Optional:
 
-- `KEYCLOAK_CLIENT_SECRET`
-- `KEYCLOAK_ISSUER`
-- `KEYCLOAK_AUDIENCE`
+- `ACCESS_TOKEN_TTL_SECONDS`
+- `REFRESH_TOKEN_TTL_SECONDS`
+- `KEYCLOAK_USER_MIGRATION_ON_DEPLOY`
+- `KEYCLOAK_USER_MIGRATION_FORCE_EMAIL`
+- `KEYCLOAK_BASE_URL`
+- `KEYCLOAK_REALM`
+- `KEYCLOAK_ADMIN_USERNAME`
+- `KEYCLOAK_ADMIN_PASSWORD`
 - `SMTP_USER`
 - `SMTP_PASSWORD`
 - `REDIS_URL`
@@ -86,9 +81,9 @@ Set `INITIAL_ADMIN_EMAIL` and `INITIAL_ADMIN_PASSWORD`, then run:
 npm run admin:bootstrap
 ```
 
-When `INITIAL_ADMIN_BOOTSTRAP_ON_START=true`, the app creates the Keycloak admin user if missing and assigns the local `Admin` role on startup. It does not reset the password on every restart.
+When `INITIAL_ADMIN_BOOTSTRAP_ON_START=true`, the app creates the local admin user if missing and assigns the `Admin` role on startup. It does not reset the password on every restart.
 
-The bootstrap command creates the Keycloak user if needed, sets the configured password, creates the local app user, and assigns the `Admin` role. Use it when you need to reset the initial admin password manually.
+The bootstrap command creates or updates the local app user password and assigns the `Admin` role. Use it when you need to reset the initial admin password manually.
 
 ## API
 

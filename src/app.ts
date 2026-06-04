@@ -4,7 +4,7 @@ import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyInstance, type preHandlerHookHandler } from "fastify";
 import type { AppConfig } from "./config/index.js";
 import { createAuthenticate } from "./modules/identity/auth/authenticate.js";
-import { createKeycloakAuthService, type KeycloakAuthService } from "./modules/identity/auth/keycloak.js";
+import { createLocalAuthService, type LocalAuthService } from "./modules/identity/auth/local.js";
 import { createSmtpMailer, type Mailer } from "./modules/identity/auth/mailer.js";
 import { createPasswordResetService, type PasswordResetService } from "./modules/identity/auth/password-reset.js";
 import { registerAuthRoutes } from "./modules/identity/auth/routes.js";
@@ -27,12 +27,12 @@ export type BuildAppOptions = {
   config: AppConfig;
   prisma: AppPrisma;
   authenticate?: preHandlerHookHandler;
-  keycloakAuth?: KeycloakAuthService;
+  localAuth?: LocalAuthService;
   mailer?: Mailer;
   passwordReset?: PasswordResetService;
   syncPermissions?: (prisma: AppPrisma) => Promise<unknown>;
   syncPermissionsOnStart?: boolean;
-  bootstrapInitialAdmin?: (prisma: AppPrisma, keycloakAuth: KeycloakAuthService) => Promise<unknown>;
+  bootstrapInitialAdmin?: (prisma: AppPrisma) => Promise<unknown>;
   bootstrapInitialAdminOnStart?: boolean;
   logger?: boolean;
 };
@@ -56,9 +56,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   });
 
   app.decorate("authenticate", options.authenticate ?? createAuthenticate(options.config, options.prisma));
-  const keycloakAuth = options.keycloakAuth ?? createKeycloakAuthService(options.config);
+  const localAuth = options.localAuth ?? createLocalAuthService(options.config, options.prisma);
   const mailer = options.mailer ?? createSmtpMailer(options.config);
-  const passwordReset = options.passwordReset ?? createPasswordResetService(options.config, options.prisma, keycloakAuth, mailer);
+  const passwordReset = options.passwordReset ?? createPasswordResetService(options.config, options.prisma, mailer);
   const shouldSyncPermissions = options.syncPermissionsOnStart ?? options.config.RBAC_SYNC_ON_START;
 
   if (shouldSyncPermissions) {
@@ -72,17 +72,16 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   if (shouldBootstrapInitialAdmin) {
     await (
       options.bootstrapInitialAdmin ??
-      (async (prisma, keycloakAuth) => {
+      (async (prisma) => {
         if (!options.config.INITIAL_ADMIN_EMAIL || !options.config.INITIAL_ADMIN_PASSWORD) return;
         await bootstrapAdminUser({
           prisma,
-          keycloakAuth,
           email: options.config.INITIAL_ADMIN_EMAIL,
           password: options.config.INITIAL_ADMIN_PASSWORD,
           resetExistingPassword: false
         });
       })
-    )(options.prisma, keycloakAuth);
+    )(options.prisma);
   }
 
   app.get("/health", async () => ({
@@ -90,9 +89,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     uptime: process.uptime()
   }));
 
-  await registerAuthRoutes(app, keycloakAuth, passwordReset);
+  await registerAuthRoutes(app, localAuth, passwordReset);
   await registerRecordRoutes(app, options.prisma);
-  await registerProfileRoutes(app, options.prisma, keycloakAuth);
+  await registerProfileRoutes(app, options.prisma);
   await registerDashboardRoutes(app, options.prisma);
   await registerHealthBloodSugarRoutes(app, options.prisma);
   await registerHealthWeightRoutes(app, options.prisma);
@@ -100,7 +99,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await registerHealthProgressRoutes(app, options.prisma);
   await registerExportRoutes(app, options.prisma);
   await registerSharedLinkRoutes(app, options.prisma);
-  await registerBackofficeRoutes(app, options.prisma, keycloakAuth);
+  await registerBackofficeRoutes(app, options.prisma);
 
   return app;
 }

@@ -1,6 +1,14 @@
 import type { AppConfig } from "../../../config/index.js";
 import { HttpError } from "../../../common/errors.js";
 
+type KeycloakConfig = AppConfig & {
+  KEYCLOAK_BASE_URL: string;
+  KEYCLOAK_REALM: string;
+  KEYCLOAK_CLIENT_ID: string;
+  KEYCLOAK_ADMIN_USERNAME: string;
+  KEYCLOAK_ADMIN_PASSWORD: string;
+};
+
 export type KeycloakTokenResponse = {
   access_token: string;
   expires_in: number;
@@ -56,39 +64,40 @@ export type KeycloakAuthService = {
 };
 
 export function createKeycloakAuthService(config: AppConfig): KeycloakAuthService {
+  const keycloakConfig = requireKeycloakConfig(config);
   return {
     async register(input) {
-      const adminToken = await getAdminToken(config);
-      await createKeycloakUser(config, adminToken, input);
-      return getUserToken(config, input);
+      const adminToken = await getAdminToken(keycloakConfig);
+      await createKeycloakUser(keycloakConfig, adminToken, input);
+      return getUserToken(keycloakConfig, input);
     },
     async login(input) {
-      return getUserToken(config, input);
+      return getUserToken(keycloakConfig, input);
     },
     async refreshToken(refreshToken) {
-      return refreshUserToken(config, refreshToken);
+      return refreshUserToken(keycloakConfig, refreshToken);
     },
     async resetPassword(input) {
-      await getUserToken(config, { email: input.email, password: input.currentPassword });
-      const adminToken = await getAdminToken(config);
-      await resetKeycloakPassword(config, adminToken, input.keycloakId, input.newPassword);
+      await getUserToken(keycloakConfig, { email: input.email, password: input.currentPassword });
+      const adminToken = await getAdminToken(keycloakConfig);
+      await resetKeycloakPassword(keycloakConfig, adminToken, input.keycloakId, input.newPassword);
     },
     async findUserByEmail(email) {
-      const adminToken = await getAdminToken(config);
-      return findKeycloakUserByEmail(config, adminToken, email);
+      const adminToken = await getAdminToken(keycloakConfig);
+      return findKeycloakUserByEmail(keycloakConfig, adminToken, email);
     },
     async setPassword(keycloakId, newPassword) {
-      const adminToken = await getAdminToken(config);
-      await resetKeycloakPassword(config, adminToken, keycloakId, newPassword);
+      const adminToken = await getAdminToken(keycloakConfig);
+      await resetKeycloakPassword(keycloakConfig, adminToken, keycloakId, newPassword);
     },
     async updateUser(input) {
-      const adminToken = await getAdminToken(config);
-      await updateKeycloakUser(config, adminToken, input);
+      const adminToken = await getAdminToken(keycloakConfig);
+      await updateKeycloakUser(keycloakConfig, adminToken, input);
     }
   };
 }
 
-async function getAdminToken(config: AppConfig): Promise<string> {
+async function getAdminToken(config: KeycloakConfig): Promise<string> {
   const body = new URLSearchParams({
     client_id: "admin-cli",
     grant_type: "password",
@@ -110,7 +119,7 @@ async function getAdminToken(config: AppConfig): Promise<string> {
   return data.access_token;
 }
 
-async function createKeycloakUser(config: AppConfig, adminToken: string, input: RegisterInput): Promise<void> {
+async function createKeycloakUser(config: KeycloakConfig, adminToken: string, input: RegisterInput): Promise<void> {
   const response = await fetch(`${config.KEYCLOAK_BASE_URL}/admin/realms/${encodeURIComponent(config.KEYCLOAK_REALM)}/users`, {
     method: "POST",
     headers: {
@@ -144,7 +153,7 @@ async function createKeycloakUser(config: AppConfig, adminToken: string, input: 
   }
 }
 
-async function findKeycloakUserByEmail(config: AppConfig, adminToken: string, email: string): Promise<KeycloakUser | null> {
+async function findKeycloakUserByEmail(config: KeycloakConfig, adminToken: string, email: string): Promise<KeycloakUser | null> {
   const url = new URL(`${config.KEYCLOAK_BASE_URL}/admin/realms/${encodeURIComponent(config.KEYCLOAK_REALM)}/users`);
   url.searchParams.set("email", email);
   url.searchParams.set("exact", "true");
@@ -160,7 +169,7 @@ async function findKeycloakUserByEmail(config: AppConfig, adminToken: string, em
   return users.find((user) => user.email?.toLowerCase() === email.toLowerCase() || user.username?.toLowerCase() === email.toLowerCase()) ?? null;
 }
 
-async function resetKeycloakPassword(config: AppConfig, adminToken: string, keycloakId: string, newPassword: string): Promise<void> {
+async function resetKeycloakPassword(config: KeycloakConfig, adminToken: string, keycloakId: string, newPassword: string): Promise<void> {
   const response = await fetch(
     `${config.KEYCLOAK_BASE_URL}/admin/realms/${encodeURIComponent(config.KEYCLOAK_REALM)}/users/${encodeURIComponent(keycloakId)}/reset-password`,
     {
@@ -183,7 +192,7 @@ async function resetKeycloakPassword(config: AppConfig, adminToken: string, keyc
   }
 }
 
-async function updateKeycloakUser(config: AppConfig, adminToken: string, input: UpdateUserInput): Promise<void> {
+async function updateKeycloakUser(config: KeycloakConfig, adminToken: string, input: UpdateUserInput): Promise<void> {
   const body: Record<string, string> = {};
   if (input.email !== undefined) {
     body.email = input.email;
@@ -213,7 +222,7 @@ async function updateKeycloakUser(config: AppConfig, adminToken: string, input: 
   }
 }
 
-async function getUserToken(config: AppConfig, input: LoginInput): Promise<KeycloakTokenResponse> {
+async function getUserToken(config: KeycloakConfig, input: LoginInput): Promise<KeycloakTokenResponse> {
   const body = new URLSearchParams({
     client_id: config.KEYCLOAK_CLIENT_ID,
     grant_type: "password",
@@ -241,7 +250,7 @@ async function getUserToken(config: AppConfig, input: LoginInput): Promise<Keycl
   return parseKeycloakResponse<KeycloakTokenResponse>(response);
 }
 
-async function refreshUserToken(config: AppConfig, refreshToken: string): Promise<KeycloakTokenResponse> {
+async function refreshUserToken(config: KeycloakConfig, refreshToken: string): Promise<KeycloakTokenResponse> {
   const body = new URLSearchParams({
     client_id: config.KEYCLOAK_CLIENT_ID,
     grant_type: "refresh_token",
@@ -284,4 +293,17 @@ async function readKeycloakError(response: Response): Promise<string> {
   } catch {
     return "Keycloak request failed";
   }
+}
+
+function requireKeycloakConfig(config: AppConfig): KeycloakConfig {
+  if (
+    !config.KEYCLOAK_BASE_URL ||
+    !config.KEYCLOAK_REALM ||
+    !config.KEYCLOAK_CLIENT_ID ||
+    !config.KEYCLOAK_ADMIN_USERNAME ||
+    !config.KEYCLOAK_ADMIN_PASSWORD
+  ) {
+    throw new HttpError(500, "Keycloak migration configuration is missing");
+  }
+  return config as KeycloakConfig;
 }

@@ -1,6 +1,5 @@
 import type { AppPrisma } from "../../infra/prisma.js";
 import { HttpError } from "../../common/errors.js";
-import type { KeycloakAuthService } from "../identity/auth/keycloak.js";
 import { ADMIN_ROLE_NAME, grantPermissionsToRole } from "../identity/rbac/sync.js";
 import {
   countRolesByIds,
@@ -69,13 +68,11 @@ export async function getBackofficeUser(prisma: AppPrisma, id: string) {
   return serializeUser(await findUserOrThrow(prisma, id));
 }
 
-export async function updateBackofficeUserProfile(prisma: AppPrisma, keycloakAuth: KeycloakAuthService, id: string, body: UpdateUserProfileInput) {
+export async function updateBackofficeUserProfile(prisma: AppPrisma, id: string, body: UpdateUserProfileInput) {
   const user = await findUserIdentityOrThrow(prisma, id);
   const { firstName, lastName, email, ...profileData } = body;
 
   if (firstName !== undefined || lastName !== undefined || email !== undefined) {
-    await keycloakAuth.updateUser({ keycloakId: user.keycloakId, firstName, lastName, email });
-
     const updateData: { email?: string; name?: string } = {};
     if (email !== undefined) updateData.email = email;
     if (firstName !== undefined || lastName !== undefined) {

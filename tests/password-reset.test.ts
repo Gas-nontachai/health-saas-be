@@ -7,12 +7,11 @@ const config: AppConfig = {
   NODE_ENV: "test",
   PORT: 3000,
   DATABASE_URL: "postgresql://dev:dev@localhost:5432/blood_sugar",
-  KEYCLOAK_BASE_URL: "http://localhost:8080",
-  KEYCLOAK_REALM: "blood-sugar",
-  KEYCLOAK_CLIENT_ID: "blood-sugar-api",
-  KEYCLOAK_ADMIN_USERNAME: "admin",
-  KEYCLOAK_ADMIN_PASSWORD: "admin",
-  KEYCLOAK_JWKS_URL: "http://localhost:8080/realms/blood-sugar/protocol/openid-connect/certs",
+  JWT_SECRET: "test-jwt-secret-that-is-long-enough-for-local-auth",
+  ACCESS_TOKEN_TTL_SECONDS: 900,
+  REFRESH_TOKEN_TTL_SECONDS: 2_592_000,
+  KEYCLOAK_USER_MIGRATION_ON_DEPLOY: false,
+  KEYCLOAK_USER_MIGRATION_FORCE_EMAIL: false,
   RESET_OTP_SECRET: "test-reset-otp-secret-that-is-long-enough",
   INITIAL_ADMIN_BOOTSTRAP_ON_START: false,
   RBAC_SYNC_ON_START: false
@@ -24,29 +23,27 @@ function mockPrisma(): AppPrisma {
       create: vi.fn(),
       findFirst: vi.fn(),
       update: vi.fn()
+    },
+    user: {
+      findUnique: vi.fn(),
+      update: vi.fn()
     }
   } as unknown as AppPrisma;
 }
 
-function mockKeycloakAuth() {
+function mockMailer() {
   return {
-    register: vi.fn(),
-    login: vi.fn(),
-    refreshToken: vi.fn(),
-    resetPassword: vi.fn(),
-    findUserByEmail: vi.fn(),
-    setPassword: vi.fn(),
-    updateUser: vi.fn()
+    sendPasswordResetOtp: vi.fn(),
+    sendTemporaryPassword: vi.fn()
   };
 }
 
 describe("password reset service", () => {
   it("does not reveal missing emails during forgot password request", async () => {
     const prisma = mockPrisma();
-    const keycloakAuth = mockKeycloakAuth();
-    keycloakAuth.findUserByEmail.mockResolvedValue(null);
-    const mailer = { sendPasswordResetOtp: vi.fn() };
-    const service = createPasswordResetService(config, prisma, keycloakAuth, mailer);
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    const mailer = mockMailer();
+    const service = createPasswordResetService(config, prisma, mailer);
 
     const response = await service.requestForgotPassword("missing@example.com");
 
@@ -57,10 +54,9 @@ describe("password reset service", () => {
 
   it("creates OTP hashes and sends mail for known emails", async () => {
     const prisma = mockPrisma();
-    const keycloakAuth = mockKeycloakAuth();
-    keycloakAuth.findUserByEmail.mockResolvedValue({ id: "kc-user-1", email: "user@example.com" });
-    const mailer = { sendPasswordResetOtp: vi.fn() };
-    const service = createPasswordResetService(config, prisma, keycloakAuth, mailer);
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({ id: "user-1", email: "user@example.com" } as never);
+    const mailer = mockMailer();
+    const service = createPasswordResetService(config, prisma, mailer);
 
     await service.requestForgotPassword("user@example.com");
 
@@ -85,7 +81,7 @@ describe("password reset service", () => {
       consumedAt: null,
       createdAt: new Date()
     });
-    const service = createPasswordResetService(config, prisma, mockKeycloakAuth(), { sendPasswordResetOtp: vi.fn() });
+    const service = createPasswordResetService(config, prisma, mockMailer());
 
     await expect(
       service.confirmForgotPassword({
@@ -103,7 +99,6 @@ describe("password reset service", () => {
 
   it("rejects expired OTPs without resetting passwords", async () => {
     const prisma = mockPrisma();
-    const keycloakAuth = mockKeycloakAuth();
     vi.mocked(prisma.passwordResetOtp.findFirst).mockResolvedValue({
       id: "otp-1",
       email: "user@example.com",
@@ -113,7 +108,7 @@ describe("password reset service", () => {
       consumedAt: null,
       createdAt: new Date()
     });
-    const service = createPasswordResetService(config, prisma, keycloakAuth, { sendPasswordResetOtp: vi.fn() });
+    const service = createPasswordResetService(config, prisma, mockMailer());
 
     await expect(
       service.confirmForgotPassword({
@@ -123,43 +118,23 @@ describe("password reset service", () => {
       })
     ).rejects.toThrow("Invalid or expired OTP");
 
-    expect(keycloakAuth.setPassword).not.toHaveBeenCalled();
+    expect(prisma.user.update).not.toHaveBeenCalled();
     expect(prisma.passwordResetOtp.update).not.toHaveBeenCalled();
   });
 
   it("resets passwords and consumes valid OTPs", async () => {
     const prisma = mockPrisma();
-    const keycloakAuth = mockKeycloakAuth();
-    keycloakAuth.findUserByEmail.mockResolvedValue({ id: "kc-user-1", email: "user@example.com" });
-    const service = createPasswordResetService(config, prisma, keycloakAuth, { sendPasswordResetOtp: vi.fn() });
-
-    await service.requestForgotPassword("user@example.com");
-    const createCall = vi.mocked(prisma.passwordResetOtp.create).mock.calls[0]?.[0];
-    vi.mocked(prisma.passwordResetOtp.findFirst).mockResolvedValue({
-      id: "otp-1",
-      email: "user@example.com",
-      otpHash: createCall.data.otpHash,
-      expiresAt: new Date(Date.now() + 60_000),
-      attempts: 0,
-      consumedAt: null,
-      createdAt: new Date()
-    });
-    const otp = vi.mocked(keycloakAuth.findUserByEmail).mock.results.length ? vi.mocked(prisma.passwordResetOtp.create).mock.calls[0] : undefined;
-    const sentOtp = vi.fn();
-    expect(otp).toBeDefined();
-
-    const mailer = {
-      sendPasswordResetOtp: sentOtp
-    };
-    const serviceWithMailer = createPasswordResetService(config, prisma, keycloakAuth, mailer);
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({ id: "user-1", email: "user@example.com" } as never);
+    const mailer = mockMailer();
+    const serviceWithMailer = createPasswordResetService(config, prisma, mailer);
     await serviceWithMailer.requestForgotPassword("user@example.com");
-    const deliveredOtp = sentOtp.mock.calls[0]?.[1] as string;
-    const secondCreateCall = vi.mocked(prisma.passwordResetOtp.create).mock.calls.at(-1)?.[0];
-    expect(secondCreateCall).toBeDefined();
+    const deliveredOtp = mailer.sendPasswordResetOtp.mock.calls[0]?.[1] as string;
+    const createCall = vi.mocked(prisma.passwordResetOtp.create).mock.calls[0]?.[0];
+    expect(createCall).toBeDefined();
     vi.mocked(prisma.passwordResetOtp.findFirst).mockResolvedValue({
       id: "otp-2",
       email: "user@example.com",
-      otpHash: secondCreateCall!.data.otpHash,
+      otpHash: createCall!.data.otpHash,
       expiresAt: new Date(Date.now() + 60_000),
       attempts: 0,
       consumedAt: null,
@@ -172,7 +147,14 @@ describe("password reset service", () => {
       newPassword: "new-password"
     });
 
-    expect(keycloakAuth.setPassword).toHaveBeenCalledWith("kc-user-1", "new-password");
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: "user-1" },
+      data: {
+        passwordHash: expect.stringMatching(/^scrypt:/),
+        passwordChangeRequired: false,
+        passwordChangedAt: expect.any(Date)
+      }
+    });
     expect(prisma.passwordResetOtp.update).toHaveBeenCalledWith({
       where: { id: "otp-2" },
       data: { consumedAt: expect.any(Date) }

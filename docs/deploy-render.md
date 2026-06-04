@@ -21,14 +21,17 @@ PORT=3000
 
 DATABASE_URL=<render-postgres-internal-database-url>
 
+JWT_SECRET=<random-secret-at-least-32-characters>
+ACCESS_TOKEN_TTL_SECONDS=900
+REFRESH_TOKEN_TTL_SECONDS=2592000
+
+# Optional: only required while importing existing users from Keycloak.
+KEYCLOAK_USER_MIGRATION_ON_DEPLOY=false
+KEYCLOAK_USER_MIGRATION_FORCE_EMAIL=false
 KEYCLOAK_BASE_URL=https://health-saas-auth.duckdns.org
 KEYCLOAK_REALM=blood-sugar-dev
-KEYCLOAK_CLIENT_ID=blood-sugar-dev-api
 KEYCLOAK_ADMIN_USERNAME=admin
 KEYCLOAK_ADMIN_PASSWORD=<keycloak-admin-password>
-KEYCLOAK_JWKS_URL=https://health-saas-auth.duckdns.org/realms/blood-sugar-dev/protocol/openid-connect/certs
-KEYCLOAK_ISSUER=https://health-saas-auth.duckdns.org/realms/blood-sugar-dev
-KEYCLOAK_AUDIENCE=blood-sugar-dev-api
 
 RESET_OTP_SECRET=<random-secret-at-least-32-characters>
 
@@ -46,18 +49,22 @@ RBAC_SYNC_ON_START=true
 
 ## First Deploy
 
-Before the first app start, run migrations against the Render database:
+The Docker runtime command runs deploy migrations before starting the server:
 
 ```bash
-npx prisma migrate deploy
-npm run admin:bootstrap
+npm run deploy:migrate
+node dist/src/server.js
 ```
 
-On Render, this can be run from a one-off shell if available, or from a temporary local command using the Render `DATABASE_URL`.
+`npm run deploy:migrate` runs:
 
-The app also runs permission sync on start when `RBAC_SYNC_ON_START=true`. Permission sync updates the fixed catalog, grants new permissions to the system `Admin` role, and grants self-service permissions to the system `User` role.
+- `npx prisma migrate deploy`
+- RBAC permission sync
+- Keycloak user migration when `KEYCLOAK_USER_MIGRATION_ON_DEPLOY=true`
 
-The app creates the initial Keycloak admin user on start when `INITIAL_ADMIN_BOOTSTRAP_ON_START=true` and `INITIAL_ADMIN_EMAIL`/`INITIAL_ADMIN_PASSWORD` are set. It does not reset the password on every restart.
+For the initial cutover from Keycloak, set `KEYCLOAK_USER_MIGRATION_ON_DEPLOY=true` while the Keycloak admin API is still reachable. The import is idempotent: it matches by legacy `keycloakId` or email, creates missing local users, assigns the default role/profile, stores a temporary password hash, marks `passwordChangeRequired=true`, and sends the temporary password by SMTP. It does not resend temporary passwords on rerun unless `KEYCLOAK_USER_MIGRATION_FORCE_EMAIL=true`.
+
+The app creates the initial local admin user on start when `INITIAL_ADMIN_BOOTSTRAP_ON_START=true` and `INITIAL_ADMIN_EMAIL`/`INITIAL_ADMIN_PASSWORD` are set. It does not reset the password on every restart.
 
 Run `npm run admin:bootstrap` only when you need to create/reset the initial admin manually.
 

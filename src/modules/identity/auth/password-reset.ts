@@ -2,37 +2,22 @@ import { createHmac, randomInt, timingSafeEqual } from "node:crypto";
 import type { AppConfig } from "../../../config/index.js";
 import type { AppPrisma } from "../../../infra/prisma.js";
 import { HttpError } from "../../../common/errors.js";
-import type { KeycloakAuthService } from "./keycloak.js";
 import type { Mailer } from "./mailer.js";
+import { hashPassword } from "./passwords.js";
 
 const OTP_TTL_MINUTES = 10;
 const MAX_OTP_ATTEMPTS = 5;
 const FORGOT_PASSWORD_MESSAGE = "If the email exists, an OTP has been sent";
 
 export type PasswordResetService = {
-  resetPassword(input: {
-    keycloakId: string;
-    email: string;
-    currentPassword: string;
-    newPassword: string;
-  }): Promise<void>;
   requestForgotPassword(email: string): Promise<{ message: string }>;
   confirmForgotPassword(input: { email: string; otp: string; newPassword: string }): Promise<void>;
 };
 
-export function createPasswordResetService(
-  config: AppConfig,
-  prisma: AppPrisma,
-  keycloakAuth: KeycloakAuthService,
-  mailer: Mailer
-): PasswordResetService {
+export function createPasswordResetService(config: AppConfig, prisma: AppPrisma, mailer: Mailer): PasswordResetService {
   return {
-    async resetPassword(input) {
-      await keycloakAuth.resetPassword(input);
-    },
-
     async requestForgotPassword(email) {
-      const user = await keycloakAuth.findUserByEmail(email);
+      const user = await prisma.user.findUnique({ where: { email } });
       if (!user) {
         return { message: FORGOT_PASSWORD_MESSAGE };
       }
@@ -74,12 +59,19 @@ export function createPasswordResetService(
         throw new HttpError(400, "Invalid or expired OTP");
       }
 
-      const user = await keycloakAuth.findUserByEmail(input.email);
+      const user = await prisma.user.findUnique({ where: { email: input.email } });
       if (!user) {
         throw new HttpError(400, "Invalid or expired OTP");
       }
 
-      await keycloakAuth.setPassword(user.id, input.newPassword);
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          passwordHash: await hashPassword(input.newPassword),
+          passwordChangeRequired: false,
+          passwordChangedAt: new Date()
+        }
+      });
       await prisma.passwordResetOtp.update({
         where: { id: otpRecord.id },
         data: { consumedAt: new Date() }

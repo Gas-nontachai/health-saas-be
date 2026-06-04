@@ -11,12 +11,11 @@ const config: AppConfig = {
   NODE_ENV: "test",
   PORT: 3000,
   DATABASE_URL: "postgresql://dev:dev@localhost:5432/blood_sugar",
-  KEYCLOAK_BASE_URL: "http://localhost:8080",
-  KEYCLOAK_REALM: "blood-sugar",
-  KEYCLOAK_CLIENT_ID: "blood-sugar-api",
-  KEYCLOAK_ADMIN_USERNAME: "admin",
-  KEYCLOAK_ADMIN_PASSWORD: "admin",
-  KEYCLOAK_JWKS_URL: "http://localhost:8080/realms/blood-sugar/protocol/openid-connect/certs",
+  JWT_SECRET: "test-jwt-secret-that-is-long-enough-for-local-auth",
+  ACCESS_TOKEN_TTL_SECONDS: 900,
+  REFRESH_TOKEN_TTL_SECONDS: 2_592_000,
+  KEYCLOAK_USER_MIGRATION_ON_DEPLOY: false,
+  KEYCLOAK_USER_MIGRATION_FORCE_EMAIL: false,
   RESET_OTP_SECRET: "test-reset-otp-secret-that-is-long-enough",
   INITIAL_ADMIN_BOOTSTRAP_ON_START: false,
   RBAC_SYNC_ON_START: false
@@ -30,7 +29,8 @@ function mockAuth(userId = "user-1", permissions: string[] = [...PERMISSION_CODE
       email: "tester@example.com",
       name: "Tester",
       roles: ["Admin"],
-      permissions
+      permissions,
+      passwordChangeRequired: false
     };
   };
 }
@@ -57,6 +57,21 @@ function mockPrisma(overrides: Partial<AppPrisma> = {}): AppPrisma {
     userPreference: {
       findUnique: vi.fn().mockResolvedValue(null),
       upsert: vi.fn()
+    },
+    user: {
+      findUnique: vi.fn(),
+      findUniqueOrThrow: vi.fn(),
+      findFirst: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      upsert: vi.fn()
+    },
+    userRole: {
+      findMany: vi.fn().mockResolvedValue([]),
+      deleteMany: vi.fn(),
+      createMany: vi.fn(),
+      findUnique: vi.fn(),
+      count: vi.fn().mockResolvedValue(0)
     },
     healthMetricEntry: {
       findMany: vi.fn().mockResolvedValue([]),
@@ -101,9 +116,18 @@ function mockKeycloakAuth() {
   };
 }
 
+function mockLocalAuth() {
+  return {
+    register: vi.fn(),
+    login: vi.fn(),
+    refreshToken: vi.fn(),
+    resetPassword: vi.fn(),
+    changeRequiredPassword: vi.fn()
+  };
+}
+
 function mockPasswordReset() {
   return {
-    resetPassword: vi.fn(),
     requestForgotPassword: vi.fn().mockResolvedValue({ message: "If the email exists, an OTP has been sent" }),
     confirmForgotPassword: vi.fn()
   };
@@ -210,7 +234,6 @@ describe("app", () => {
 
   it("bootstraps initial admin on app start when enabled", async () => {
     const prisma = mockPrisma();
-    const keycloakAuth = mockKeycloakAuth();
     const bootstrapInitialAdmin = vi.fn().mockResolvedValue(undefined);
     const app = await buildApp({
       config: {
@@ -221,23 +244,25 @@ describe("app", () => {
       },
       prisma,
       authenticate: mockAuth(),
-      keycloakAuth,
       bootstrapInitialAdmin,
       logger: false
     });
 
-    expect(bootstrapInitialAdmin).toHaveBeenCalledWith(prisma, keycloakAuth);
+    expect(bootstrapInitialAdmin).toHaveBeenCalledWith(prisma);
     await app.close();
   });
 
-  it("registers users through Keycloak and returns tokens", async () => {
-    const keycloakAuth = mockKeycloakAuth();
-    keycloakAuth.register.mockResolvedValue({
+  it("registers users through local auth and returns tokens", async () => {
+    const localAuth = mockLocalAuth();
+    localAuth.register.mockResolvedValue({
       access_token: "access-token",
       expires_in: 300,
+      refresh_token: "refresh-token",
+      requiresPasswordChange: false,
+      user: { id: "user-1", email: "tester@example.com", name: "Tester", roles: [], permissions: [] },
       token_type: "Bearer"
     });
-    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth(), keycloakAuth, logger: false });
+    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth(), localAuth, logger: false });
 
     const response = await app.inject({
       method: "POST",
@@ -253,9 +278,12 @@ describe("app", () => {
     expect(response.json()).toEqual({
       access_token: "access-token",
       expires_in: 300,
+      refresh_token: "refresh-token",
+      requiresPasswordChange: false,
+      user: { id: "user-1", email: "tester@example.com", name: "Tester", roles: [], permissions: [] },
       token_type: "Bearer"
     });
-    expect(keycloakAuth.register).toHaveBeenCalledWith({
+    expect(localAuth.register).toHaveBeenCalledWith({
       email: "tester@example.com",
       password: "password123",
       firstName: "Tester"
@@ -263,15 +291,17 @@ describe("app", () => {
     await app.close();
   });
 
-  it("logs users in through Keycloak and returns tokens", async () => {
-    const keycloakAuth = mockKeycloakAuth();
-    keycloakAuth.login.mockResolvedValue({
+  it("logs users in through local auth and returns tokens", async () => {
+    const localAuth = mockLocalAuth();
+    localAuth.login.mockResolvedValue({
       access_token: "access-token",
       expires_in: 300,
       refresh_token: "refresh-token",
+      requiresPasswordChange: true,
+      user: { id: "user-1", email: "tester@example.com", name: "Tester", roles: ["User"], permissions: ["auth.read.self"] },
       token_type: "Bearer"
     });
-    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth(), keycloakAuth, logger: false });
+    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth(), localAuth, logger: false });
 
     const response = await app.inject({
       method: "POST",
@@ -286,9 +316,10 @@ describe("app", () => {
     expect(response.json()).toMatchObject({
       access_token: "access-token",
       refresh_token: "refresh-token",
-      token_type: "Bearer"
+      token_type: "Bearer",
+      requiresPasswordChange: true
     });
-    expect(keycloakAuth.login).toHaveBeenCalledWith({
+    expect(localAuth.login).toHaveBeenCalledWith({
       email: "tester@example.com",
       password: "password123"
     });
@@ -309,8 +340,8 @@ describe("app", () => {
   });
 
   it("resets password for authenticated users", async () => {
-    const passwordReset = mockPasswordReset();
-    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth("user-1"), passwordReset, logger: false });
+    const localAuth = mockLocalAuth();
+    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth("user-1"), localAuth, logger: false });
 
     const response = await app.inject({
       method: "POST",
@@ -320,9 +351,8 @@ describe("app", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ message: "Password has been reset" });
-    expect(passwordReset.resetPassword).toHaveBeenCalledWith({
-      keycloakId: "kc-1",
-      email: "tester@example.com",
+    expect(localAuth.resetPassword).toHaveBeenCalledWith({
+      userId: "user-1",
       currentPassword: "old-password",
       newPassword: "new-password"
     });
@@ -330,9 +360,9 @@ describe("app", () => {
   });
 
   it("returns errors when current password verification fails", async () => {
-    const passwordReset = mockPasswordReset();
-    passwordReset.resetPassword.mockRejectedValue(new HttpError(401, "Invalid email or password"));
-    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth("user-1"), passwordReset, logger: false });
+    const localAuth = mockLocalAuth();
+    localAuth.resetPassword.mockRejectedValue(new HttpError(401, "Invalid current password"));
+    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth("user-1"), localAuth, logger: false });
 
     const response = await app.inject({
       method: "POST",
@@ -341,7 +371,28 @@ describe("app", () => {
     });
 
     expect(response.statusCode).toBe(401);
-    expect(response.json()).toEqual({ ok: false, error: "Invalid email or password" });
+    expect(response.json()).toEqual({ ok: false, error: "Invalid current password" });
+    await app.close();
+  });
+
+  it("changes required password for migrated users", async () => {
+    const localAuth = mockLocalAuth();
+    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth("user-1"), localAuth, logger: false });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/auth/password/change-required",
+      headers: { authorization: "Bearer token" },
+      payload: { currentPassword: "temporary-password", newPassword: "new-password" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ message: "Password has been changed" });
+    expect(localAuth.changeRequiredPassword).toHaveBeenCalledWith({
+      userId: "user-1",
+      currentPassword: "temporary-password",
+      newPassword: "new-password"
+    });
     await app.close();
   });
 

@@ -1,5 +1,4 @@
 import type { FastifyInstance } from "fastify";
-import type { KeycloakAuthService } from "../identity/auth/keycloak.js";
 import type { AppPrisma } from "../../infra/prisma.js";
 import { requirePermission } from "../identity/rbac/authorize.js";
 import { PERMISSIONS } from "../identity/rbac/permissions.js";
@@ -23,7 +22,7 @@ import {
   updateBackofficeUserRoles
 } from "./service.js";
 
-export async function registerBackofficeRoutes(app: FastifyInstance, prisma: AppPrisma, keycloakAuth: KeycloakAuthService): Promise<void> {
+export async function registerBackofficeRoutes(app: FastifyInstance, prisma: AppPrisma): Promise<void> {
   app.get("/backoffice/permissions", { preHandler: [app.authenticate, requirePermission("roles.read.system")] }, async () => ({ data: PERMISSIONS }));
 
   app.get("/backoffice/roles", { preHandler: [app.authenticate, requirePermission("roles.read.system")] }, async () => listRoles(prisma));
@@ -65,7 +64,7 @@ export async function registerBackofficeRoutes(app: FastifyInstance, prisma: App
   app.put("/backoffice/users/:id/profile", { preHandler: [app.authenticate, requirePermission("users.update.system")] }, async (request) => {
     const params = idParamsSchema.parse(request.params);
     const body = updateUserProfileSchema.parse(request.body);
-    return updateBackofficeUserProfile(prisma, keycloakAuth, params.id, body);
+    return updateBackofficeUserProfile(prisma, params.id, body);
   });
 
   app.put("/backoffice/users/:id/roles", { preHandler: [app.authenticate, requirePermission("users.assignRoles.system")] }, async (request) => {

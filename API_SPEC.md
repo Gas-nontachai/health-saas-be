@@ -4,7 +4,7 @@ Base URL: `http://localhost:3000`
 
 ## Authentication
 
-Backend มี auth endpoints ให้ FE เรียกโดยตรง — ภายในจะ proxy ไปยัง **Keycloak** ให้อัตโนมัติ
+Backend มี auth endpoints ให้ FE เรียกโดยตรง และออก **local JWT** จาก App DB โดยไม่พึ่ง Keycloak runtime
 
 ทุก endpoint (ยกเว้น `GET /health`, `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/password/forgot/*`) ต้องส่ง **Bearer token** ผ่าน header:
 
@@ -12,32 +12,20 @@ Backend มี auth endpoints ให้ FE เรียกโดยตรง —
 Authorization: Bearer <access_token>
 ```
 
-- Backend verify token ผ่าน Keycloak JWKS endpoint โดยอัตโนมัติ
-- เมื่อ token ถูกต้อง ระบบจะ **upsert user** ในฐานข้อมูลจาก token payload (`sub`, `email`, `name`)
-- ครั้งแรกที่ยิง API ด้วย token ใหม่ ระบบจะสร้าง user + profile ให้เอง
+- Backend verify token ด้วย `JWT_SECRET` ภายในระบบ
+- User ถูกค้นจาก App DB ด้วย token subject (`user.id`)
 - ระบบจะโหลด `roles` และ `permissions` จาก App DB เพื่อให้ FE ใช้ซ่อน/โชว์เมนู และ backend ใช้ enforce ทุก protected endpoint
 - หาก token ไม่ถูกต้อง/หมดอายุ จะได้ response `401`
+- ถ้า user มี `passwordChangeRequired=true` จะเรียกได้เฉพาะ `GET /auth/me`, `POST /auth/password/change-required`, และ `POST /auth/password/reset`; API อื่นจะได้ `403` พร้อม error `PASSWORD_CHANGE_REQUIRED`
 
 ### FE Integration Flow (สรุป)
 
-```
-┌─────────┐                              ┌─────────────┐         ┌──────────┐
-│   FE    │── POST /auth/register ──────▶│   Backend   │──proxy─▶│ Keycloak │
-│  (SPA)  │── POST /auth/login ────────▶│   :3000     │──proxy─▶│          │
-│         │◀── token response ───────────│             │◀────────│          │
-│         │                              │             │         └──────────┘
-│         │── Bearer token ────────────▶│             │
-│         │◀── JSON data ───────────────│             │
-└─────────┘                              └─────────────┘
-
-1. FE เรียก POST /auth/register หรือ POST /auth/login
-2. Backend สร้าง user ใน Keycloak แล้วส่ง token กลับ
-3. FE เก็บ access_token + refresh_token
-4. FE ยิง API อื่นๆ ด้วย Authorization: Bearer <access_token>
-5. Backend verify token → upsert user → return data
-6. เมื่อ access_token หมดอายุ (5 นาที) → FE เรียก POST /auth/refresh ด้วย refresh_token
-7. ได้ access_token + refresh_token ชุดใหม่ → กลับไปข้อ 4
-```
+1. FE เรียก `POST /auth/register` หรือ `POST /auth/login`
+2. Backend ตรวจ password hash ใน App DB แล้วส่ง `access_token` + `refresh_token`
+3. FE เก็บ token และยิง API อื่นด้วย `Authorization: Bearer <access_token>`
+4. Backend verify local JWT → load user roles/permissions → return data
+5. เมื่อ `access_token` หมดอายุ FE เรียก `POST /auth/refresh` ด้วย `refreshToken`
+6. ถ้า login response มี `requiresPasswordChange=true` FE ต้อง redirect ไปหน้าเปลี่ยนรหัสผ่านทันที
 
 ---
 
@@ -67,7 +55,7 @@ Authorization: Bearer <access_token>
 | `409` | Conflict (e.g. user already exists) |
 | `429` | Rate limit exceeded |
 | `500` | Internal server error |
-| `502` | Keycloak upstream error |
+| `502` | Upstream integration error |
 
 ---
 
@@ -94,7 +82,7 @@ Authorization: Bearer <access_token>
 
 #### `POST /auth/register`
 
-สมัครสมาชิก — สร้าง user ใน Keycloak แล้วส่ง token กลับ (ไม่ต้อง authentication)
+สมัครสมาชิก — สร้าง user ใน App DB แล้วส่ง local token กลับ (ไม่ต้อง authentication)
 
 **Request Body:**
 
@@ -121,13 +109,17 @@ Authorization: Bearer <access_token>
 ```json
 {
   "access_token": "eyJhbGciOi...",
-  "expires_in": 300,
-  "refresh_expires_in": 1800,
+  "expires_in": 900,
   "refresh_token": "eyJhbGciOi...",
   "token_type": "Bearer",
-  "id_token": "eyJhbGciOi...",
-  "session_state": "uuid",
-  "scope": "openid profile email"
+  "requiresPasswordChange": false,
+  "user": {
+    "id": "uuid",
+    "email": "user@example.com",
+    "name": "สมชาย ใจดี",
+    "roles": ["User"],
+    "permissions": ["auth.read.self", "profile.read.self"]
+  }
 }
 ```
 
@@ -137,13 +129,12 @@ Authorization: Bearer <access_token>
 |---|---|
 | `400` | Validation error (email format, password too short) |
 | `409` | User already exists |
-| `502` | Keycloak upstream error |
 
 ---
 
 #### `POST /auth/login`
 
-เข้าสู่ระบบ — ส่ง email/password ไป Keycloak แล้วรับ token กลับ (ไม่ต้อง authentication)
+เข้าสู่ระบบ — ตรวจ email/password กับ App DB แล้วรับ local token กลับ (ไม่ต้อง authentication)
 
 **Request Body:**
 
@@ -166,15 +157,21 @@ Authorization: Bearer <access_token>
 ```json
 {
   "access_token": "eyJhbGciOi...",
-  "expires_in": 300,
-  "refresh_expires_in": 1800,
+  "expires_in": 900,
   "refresh_token": "eyJhbGciOi...",
   "token_type": "Bearer",
-  "id_token": "eyJhbGciOi...",
-  "session_state": "uuid",
-  "scope": "openid profile email"
+  "requiresPasswordChange": true,
+  "user": {
+    "id": "uuid",
+    "email": "user@example.com",
+    "name": "สมชาย",
+    "roles": ["User"],
+    "permissions": ["auth.read.self"]
+  }
 }
 ```
+
+ถ้า `requiresPasswordChange=true` FE ต้อง redirect ไปหน้าเปลี่ยนรหัสผ่าน และไม่ควรเรียก dashboard/health/profile/report APIs จนกว่าจะเปลี่ยนสำเร็จ
 
 **Errors:**
 
@@ -196,7 +193,7 @@ Authorization: Bearer <access_token>
 ```json
 {
   "id": "uuid",
-  "keycloakId": "keycloak-uuid",
+  "keycloakId": "legacy-keycloak-uuid-or-null",
   "email": "user@example.com",
   "name": "สมชาย",
   "roles": ["User"],
@@ -205,7 +202,8 @@ Authorization: Bearer <access_token>
     "profile.read.self",
     "records.read.self",
     "weights.read.self"
-  ]
+  ],
+  "passwordChangeRequired": false
 }
 ```
 
@@ -217,7 +215,7 @@ FE should treat these permissions as UX hints only. Backend guards remain the so
 
 ต่ออายุ token ด้วย refresh_token (ไม่ต้อง authentication)
 
-> access_token หมดอายุ **5 นาที**, refresh_token หมดอายุ **30 นาที**  
+> access_token หมดอายุตาม `ACCESS_TOKEN_TTL_SECONDS` (default 900 วินาที), refresh_token หมดอายุตาม `REFRESH_TOKEN_TTL_SECONDS` (default 30 วัน)  
 > FE ควร refresh ก่อน access_token หมดอายุ หรือเมื่อได้ 401
 
 **Request Body:**
@@ -239,12 +237,17 @@ FE should treat these permissions as UX hints only. Backend guards remain the so
 ```json
 {
   "access_token": "eyJhbGciOi...",
-  "expires_in": 300,
-  "refresh_expires_in": 1800,
+  "expires_in": 900,
   "refresh_token": "eyJhbGciOi...",
   "token_type": "Bearer",
-  "session_state": "uuid",
-  "scope": "profile email"
+  "requiresPasswordChange": false,
+  "user": {
+    "id": "uuid",
+    "email": "user@example.com",
+    "name": "สมชาย",
+    "roles": ["User"],
+    "permissions": ["auth.read.self"]
+  }
 }
 ```
 
@@ -292,6 +295,47 @@ FE should treat these permissions as UX hints only. Backend guards remain the so
 | Status | Description |
 |---|---|
 | `400` | Validation error |
+| `401` | Invalid current password / Missing token |
+
+---
+
+#### `POST /auth/password/change-required`
+
+เปลี่ยนรหัสผ่านสำหรับ migrated user ที่ login ด้วย temporary password และยังมี `passwordChangeRequired=true`
+
+**Headers:** `Authorization: Bearer <access_token>`
+
+**Request Body:**
+
+| Field | Type | Required | Validation |
+|---|---|---|---|
+| `currentPassword` | `string` | ✅ | temporary/current password, min 1 character |
+| `newPassword` | `string` | ✅ | min 8 characters, ต้องต่างจาก current password |
+
+**Request Body Example:**
+
+```json
+{
+  "currentPassword": "Tmp-TemporaryPassword",
+  "newPassword": "NewP@ss456"
+}
+```
+
+**Response** `200 OK`
+
+```json
+{
+  "message": "Password has been changed"
+}
+```
+
+หลังสำเร็จ backend จะ set `passwordChangeRequired=false` และ user สามารถเรียก protected APIs อื่นได้ตาม permissions ปกติ
+
+**Errors:**
+
+| Status | Description |
+|---|---|
+| `400` | Validation error / new password ซ้ำกับ current password |
 | `401` | Invalid current password / Missing token |
 
 ---
@@ -571,7 +615,7 @@ FE should treat these permissions as UX hints only. Backend guards remain the so
 
 #### `PUT /profile`
 
-อัปเดต profile (สร้างให้อัตโนมัติถ้ายังไม่มี) สามารถแก้ชื่อ/email ได้ (sync กับ Keycloak)
+อัปเดต profile (สร้างให้อัตโนมัติถ้ายังไม่มี) สามารถแก้ชื่อ/email ได้ใน App DB
 
 **Headers:** `Authorization: Bearer <token>`
 
@@ -1688,7 +1732,7 @@ Public endpoint สำหรับหน้า `/shared/{token}` ไม่ต้
   "data": [
     {
       "id": "uuid",
-      "keycloakId": "keycloak-uuid",
+      "keycloakId": "legacy-keycloak-uuid-or-null",
       "email": "user@example.com",
       "name": "สมชาย",
       "profile": {
@@ -1732,7 +1776,7 @@ Public endpoint สำหรับหน้า `/shared/{token}` ไม่ต้
 | `weight` | `number \| null` | ❌ | positive |
 | `height` | `number \| null` | ❌ | positive |
 
-ถ้าแก้ `firstName`, `lastName`, หรือ `email` backend จะ sync ไป Keycloak ด้วย
+ถ้าแก้ `firstName`, `lastName`, หรือ `email` backend จะอัปเดต identity ใน App DB โดยตรง
 
 #### `PUT /backoffice/users/:id/roles`
 
@@ -1761,9 +1805,15 @@ replace roles ของ user
 | Field | Type | Description |
 |---|---|---|
 | `id` | `String (UUID)` | Primary key |
-| `keycloakId` | `String` | Keycloak subject (unique) |
-| `email` | `String` | Email จาก token |
-| `name` | `String?` | ชื่อจาก token |
+| `keycloakId` | `String?` | Legacy Keycloak subject สำหรับ mapping migration (unique, optional) |
+| `email` | `String` | Email สำหรับ local login (unique) |
+| `name` | `String?` | ชื่อผู้ใช้ |
+| `passwordHash` | `String?` | Local password hash |
+| `passwordChangeRequired` | `Boolean` | บังคับเปลี่ยนรหัสผ่านหลัง login |
+| `passwordChangedAt` | `DateTime?` | เวลาที่เปลี่ยนรหัสผ่านล่าสุด |
+| `migratedFrom` | `String?` | แหล่ง migration เช่น `keycloak` |
+| `migratedAt` | `DateTime?` | เวลาที่ migrate user |
+| `temporaryPasswordSentAt` | `DateTime?` | เวลาที่ส่ง temporary password ล่าสุด |
 | `createdAt` | `DateTime` | วันที่สร้าง |
 
 ### Profile
