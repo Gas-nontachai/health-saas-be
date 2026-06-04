@@ -33,10 +33,14 @@ export async function importOldDatabase(): Promise<void> {
 
   const oldPrisma = new PrismaClient({ datasources: { db: { url: oldDatabaseUrl } } });
   try {
-    const stats = await importOldDatabaseData(oldPrisma, prisma);
-    console.log(
-      `Old database import complete. users=${stats.users} profiles=${stats.profiles} records=${stats.records} healthMetricEntries=${stats.healthMetricEntries} healthGoals=${stats.healthGoals} userPreferences=${stats.userPreferences} sharedLinks=${stats.sharedLinks}`
-    );
+    try {
+      const stats = await importOldDatabaseData(oldPrisma, prisma);
+      console.log(
+        `Old database import complete. users=${stats.users} profiles=${stats.profiles} records=${stats.records} healthMetricEntries=${stats.healthMetricEntries} healthGoals=${stats.healthGoals} userPreferences=${stats.userPreferences} sharedLinks=${stats.sharedLinks}`
+      );
+    } catch (error) {
+      console.warn(`Old database import failed but deploy will continue. ${formatError(error)} Use an external old database URL if the internal Render hostname is unreachable from this service.`);
+    }
   } finally {
     await oldPrisma.$disconnect();
   }
@@ -201,4 +205,9 @@ export async function importOldDatabaseData(oldPrisma: PrismaClient, targetPrism
 
 function jsonOrFallback(value: Prisma.JsonValue, fallback: Prisma.InputJsonValue): Prisma.InputJsonValue {
   return value === null ? fallback : (value as Prisma.InputJsonValue);
+}
+
+function formatError(error: unknown): string {
+  if (error instanceof Error) return error.message.replace(/\s+/g, " ").trim();
+  return typeof error === "string" ? error.replace(/\s+/g, " ").trim() : "Unknown error";
 }
