@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { loadConfig, type AppConfig } from "../../../config/index.js";
+import "dotenv/config";
+import { z } from "zod";
 import { prisma } from "../../../infra/prisma.js";
 import { createSmtpMailer } from "./mailer.js";
 import { hashPassword } from "./passwords.js";
@@ -15,8 +16,32 @@ type KeycloakUser = {
   enabled?: boolean;
 };
 
+const optionalNonEmptyString = z.preprocess((value) => (value === "" ? undefined : value), z.string().min(1).optional());
+
+const keycloakMigrationConfigSchema = z.object({
+  KEYCLOAK_USER_MIGRATION_ON_DEPLOY: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  KEYCLOAK_USER_MIGRATION_FORCE_EMAIL: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  KEYCLOAK_BASE_URL: z.string().url().optional(),
+  KEYCLOAK_REALM: optionalNonEmptyString,
+  KEYCLOAK_ADMIN_USERNAME: optionalNonEmptyString,
+  KEYCLOAK_ADMIN_PASSWORD: optionalNonEmptyString,
+  SMTP_HOST: optionalNonEmptyString,
+  SMTP_PORT: z.coerce.number().int().positive().optional(),
+  SMTP_USER: optionalNonEmptyString,
+  SMTP_PASSWORD: optionalNonEmptyString,
+  SMTP_FROM: optionalNonEmptyString
+});
+
+type KeycloakMigrationConfig = z.infer<typeof keycloakMigrationConfigSchema>;
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const config = loadConfig();
+  const config = loadKeycloakMigrationConfig();
   try {
     if (!config.KEYCLOAK_USER_MIGRATION_ON_DEPLOY) {
       console.log("Skipping Keycloak user migration because KEYCLOAK_USER_MIGRATION_ON_DEPLOY=false.");
@@ -28,7 +53,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
 }
 
-export async function migrateKeycloakUsers(config: AppConfig): Promise<void> {
+export async function migrateKeycloakUsers(config: KeycloakMigrationConfig): Promise<void> {
   assertKeycloakConfig(config);
   const mailer = createSmtpMailer(config);
   const adminToken = await getAdminToken(config);
@@ -131,14 +156,18 @@ async function listKeycloakUsers(config: RequiredKeycloakConfig, adminToken: str
   return (await response.json()) as KeycloakUser[];
 }
 
-type RequiredKeycloakConfig = AppConfig & {
+type RequiredKeycloakConfig = KeycloakMigrationConfig & {
   KEYCLOAK_BASE_URL: string;
   KEYCLOAK_REALM: string;
   KEYCLOAK_ADMIN_USERNAME: string;
   KEYCLOAK_ADMIN_PASSWORD: string;
 };
 
-function assertKeycloakConfig(config: AppConfig): asserts config is RequiredKeycloakConfig {
+function loadKeycloakMigrationConfig(): KeycloakMigrationConfig {
+  return keycloakMigrationConfigSchema.parse(process.env);
+}
+
+function assertKeycloakConfig(config: KeycloakMigrationConfig): asserts config is RequiredKeycloakConfig {
   if (!config.KEYCLOAK_BASE_URL || !config.KEYCLOAK_REALM || !config.KEYCLOAK_ADMIN_USERNAME || !config.KEYCLOAK_ADMIN_PASSWORD) {
     throw new Error("KEYCLOAK_BASE_URL, KEYCLOAK_REALM, KEYCLOAK_ADMIN_USERNAME, and KEYCLOAK_ADMIN_PASSWORD are required for user migration");
   }

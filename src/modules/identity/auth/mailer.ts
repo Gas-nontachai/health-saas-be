@@ -1,13 +1,20 @@
 import nodemailer from "nodemailer";
-import type { AppConfig } from "../../../config/index.js";
 import { HttpError } from "../../../common/errors.js";
+
+export type SmtpMailerConfig = {
+  SMTP_HOST?: string;
+  SMTP_PORT?: number;
+  SMTP_USER?: string;
+  SMTP_PASSWORD?: string;
+  SMTP_FROM?: string;
+};
 
 export type Mailer = {
   sendPasswordResetOtp(email: string, otp: string): Promise<void>;
   sendTemporaryPassword(email: string, temporaryPassword: string): Promise<void>;
 };
 
-export function createSmtpMailer(config: AppConfig): Mailer {
+export function createSmtpMailer(config: SmtpMailerConfig): Mailer {
   const sendMail = async (input: { to: string; subject: string; text: string; html: string }) => {
     assertSmtpConfig(config);
 
@@ -51,7 +58,7 @@ export function createSmtpMailer(config: AppConfig): Mailer {
   };
 }
 
-function assertSmtpConfig(config: AppConfig): asserts config is AppConfig & {
+function assertSmtpConfig(config: SmtpMailerConfig): asserts config is SmtpMailerConfig & {
   SMTP_HOST: string;
   SMTP_PORT: number;
   SMTP_FROM: string;
