@@ -35,7 +35,8 @@ const keycloakMigrationConfigSchema = z.object({
   SMTP_PORT: z.coerce.number().int().positive().optional(),
   SMTP_USER: optionalNonEmptyString,
   SMTP_PASSWORD: optionalNonEmptyString,
-  SMTP_FROM: optionalNonEmptyString
+  SMTP_FROM: optionalNonEmptyString,
+  SMTP_TIMEOUT_MS: z.coerce.number().int().positive().optional()
 });
 
 type KeycloakMigrationConfig = z.infer<typeof keycloakMigrationConfigSchema>;
@@ -60,6 +61,7 @@ export async function migrateKeycloakUsers(config: KeycloakMigrationConfig): Pro
   let migrated = 0;
   let skipped = 0;
   let emailed = 0;
+  let emailFailed = 0;
 
   for (let first = 0; ; first += 100) {
     const users = await listKeycloakUsers(config, adminToken, first, 100);
@@ -113,9 +115,14 @@ export async function migrateKeycloakUsers(config: KeycloakMigrationConfig): Pro
       await prisma.profile.upsert({ where: { userId: user.id }, update: {}, create: { userId: user.id } });
 
       if (temporaryPassword) {
-        await mailer.sendTemporaryPassword(email, temporaryPassword);
-        await prisma.user.update({ where: { id: user.id }, data: { temporaryPasswordSentAt: new Date() } });
-        emailed += 1;
+        try {
+          await mailer.sendTemporaryPassword(email, temporaryPassword);
+          await prisma.user.update({ where: { id: user.id }, data: { temporaryPasswordSentAt: new Date() } });
+          emailed += 1;
+        } catch (error) {
+          emailFailed += 1;
+          console.warn(`Temporary password email failed for ${email}; continuing migration. ${formatError(error)}`);
+        }
       }
       migrated += 1;
     }
@@ -123,7 +130,7 @@ export async function migrateKeycloakUsers(config: KeycloakMigrationConfig): Pro
     if (users.length < 100) break;
   }
 
-  console.log(`Keycloak user migration complete. migrated=${migrated} emailed=${emailed} skipped=${skipped}`);
+  console.log(`Keycloak user migration complete. migrated=${migrated} emailed=${emailed} emailFailed=${emailFailed} skipped=${skipped}`);
 }
 
 async function getAdminToken(config: RequiredKeycloakConfig): Promise<string> {
@@ -179,4 +186,9 @@ function buildKeycloakName(user: KeycloakUser): string | null {
 
 function generateTemporaryPassword(): string {
   return `Tmp-${randomBytes(18).toString("base64url")}`;
+}
+
+function formatError(error: unknown): string {
+  if (error instanceof Error) return error.message.replace(/\s+/g, " ").trim();
+  return typeof error === "string" ? error.replace(/\s+/g, " ").trim() : "Unknown error";
 }

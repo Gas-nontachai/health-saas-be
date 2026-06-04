@@ -7,6 +7,7 @@ export type SmtpMailerConfig = {
   SMTP_USER?: string;
   SMTP_PASSWORD?: string;
   SMTP_FROM?: string;
+  SMTP_TIMEOUT_MS?: number;
 };
 
 export type Mailer = {
@@ -22,6 +23,9 @@ export function createSmtpMailer(config: SmtpMailerConfig): Mailer {
       host: config.SMTP_HOST,
       port: config.SMTP_PORT,
       secure: config.SMTP_PORT === 465,
+      connectionTimeout: config.SMTP_TIMEOUT_MS ?? 10_000,
+      greetingTimeout: config.SMTP_TIMEOUT_MS ?? 10_000,
+      socketTimeout: config.SMTP_TIMEOUT_MS ?? 10_000,
       auth:
         config.SMTP_USER && config.SMTP_PASSWORD
           ? {
