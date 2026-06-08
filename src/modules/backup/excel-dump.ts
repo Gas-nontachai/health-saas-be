@@ -24,13 +24,12 @@ function getSheetDefinitions(): SheetDefinition[] {
   return [
     {
       name: "users",
-      columns: columns("id", "keycloakId", "email", "name", "passwordChangeRequired", "passwordChangedAt", "migratedFrom", "migratedAt", "temporaryPasswordSentAt", "createdAt"),
+      columns: columns("id", "email", "name", "passwordChangeRequired", "passwordChangedAt", "migratedFrom", "migratedAt", "temporaryPasswordSentAt", "createdAt"),
       loadRows: (prisma) =>
         prisma.user.findMany({
           orderBy: { createdAt: "asc" },
           select: {
             id: true,
-            keycloakId: true,
             email: true,
             name: true,
             passwordChangeRequired: true,

@@ -26,7 +26,6 @@ export function createAuthenticate(config: AppConfig, prisma: AppPrisma): preHan
     const { roles, permissions } = await getUserRolePermissions(prisma, user.id);
     request.user = {
       id: user.id,
-      keycloakId: user.keycloakId,
       email: user.email,
       name: user.name,
       roles,

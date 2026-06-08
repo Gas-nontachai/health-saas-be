@@ -1,14 +1,9 @@
-import nodemailer from "nodemailer";
-import type SMTPTransport from "nodemailer/lib/smtp-transport/index.js";
 import { HttpError } from "../../../common/errors.js";
 
-export type SmtpMailerConfig = {
-  SMTP_HOST?: string;
-  SMTP_PORT?: number;
-  SMTP_USER?: string;
-  SMTP_PASSWORD?: string;
-  SMTP_FROM?: string;
-  SMTP_TIMEOUT_MS?: number;
+export type ResendMailerConfig = {
+  RESEND_API_KEY?: string;
+  MAIL_FROM?: string;
+  MAIL_TIMEOUT_MS?: number;
 };
 
 export type Mailer = {
@@ -16,32 +11,39 @@ export type Mailer = {
   sendTemporaryPassword(email: string, temporaryPassword: string): Promise<void>;
 };
 
-export function createSmtpMailer(config: SmtpMailerConfig): Mailer {
+export function createResendMailer(config: ResendMailerConfig): Mailer {
   const sendMail = async (input: { to: string; subject: string; text: string; html: string }) => {
-    assertSmtpConfig(config);
+    assertResendConfig(config);
 
-    const transportOptions: SMTPTransport.Options = {
-      host: config.SMTP_HOST,
-      port: config.SMTP_PORT,
-      secure: config.SMTP_PORT === 465,
-      connectionTimeout: config.SMTP_TIMEOUT_MS ?? 10_000,
-      greetingTimeout: config.SMTP_TIMEOUT_MS ?? 10_000,
-      socketTimeout: config.SMTP_TIMEOUT_MS ?? 10_000,
-      auth:
-        config.SMTP_USER && config.SMTP_PASSWORD
-          ? {
-              user: config.SMTP_USER,
-              pass: config.SMTP_PASSWORD
-            }
-          : undefined
-    };
-    Object.assign(transportOptions, { family: 4 });
-    const transporter = nodemailer.createTransport(transportOptions);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), config.MAIL_TIMEOUT_MS ?? 10_000);
 
-    await transporter.sendMail({
-      from: config.SMTP_FROM,
-      ...input
-    });
+    try {
+      const response = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.RESEND_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          from: config.MAIL_FROM,
+          to: [input.to],
+          subject: input.subject,
+          html: input.html,
+          text: input.text
+        }),
+        signal: controller.signal
+      });
+
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown Resend error";
+      throw new HttpError(500, `Failed to send email via Resend: ${message}`);
+    } finally {
+      clearTimeout(timeout);
+    }
   };
 
   return {
@@ -65,12 +67,11 @@ export function createSmtpMailer(config: SmtpMailerConfig): Mailer {
   };
 }
 
-function assertSmtpConfig(config: SmtpMailerConfig): asserts config is SmtpMailerConfig & {
-  SMTP_HOST: string;
-  SMTP_PORT: number;
-  SMTP_FROM: string;
+function assertResendConfig(config: ResendMailerConfig): asserts config is ResendMailerConfig & {
+  RESEND_API_KEY: string;
+  MAIL_FROM: string;
 } {
-  if (!config.SMTP_HOST || !config.SMTP_PORT || !config.SMTP_FROM) {
-    throw new HttpError(500, "SMTP configuration is missing");
+  if (!config.RESEND_API_KEY || !config.MAIL_FROM) {
+    throw new HttpError(500, "Resend mail configuration is missing");
   }
 }

@@ -14,7 +14,7 @@ if (options.help) {
 loadEnvFile(options.envFile);
 
 const sourceUrl = ensureSslMode(
-  options.sourceUrl ?? process.env.SOURCE_DATABASE_URL ?? process.env.OLD_DATABASE_URL
+  options.sourceUrl ?? process.env.SOURCE_DATABASE_URL
 );
 const targetUrl = ensureSslMode(
   options.targetUrl ?? process.env.TARGET_DIRECT_URL ?? process.env.DIRECT_URL
@@ -24,7 +24,7 @@ const includePrismaMigrations = Boolean(options.includePrismaMigrations);
 const shouldTruncateTarget = !options.keepTargetData;
 
 if (!sourceUrl) {
-  fail("Missing source database URL. Pass --source-url or set SOURCE_DATABASE_URL/OLD_DATABASE_URL.");
+  fail("Missing source database URL. Pass --source-url or set SOURCE_DATABASE_URL.");
 }
 
 if (!targetUrl) {
@@ -280,7 +280,7 @@ Options:
   --help                            Show this message.
 
 Environment fallback order:
-  source: SOURCE_DATABASE_URL -> OLD_DATABASE_URL
+  source: SOURCE_DATABASE_URL
   target: TARGET_DIRECT_URL -> DIRECT_URL
 
 Notes:

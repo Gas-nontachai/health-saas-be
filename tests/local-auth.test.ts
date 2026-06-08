@@ -12,8 +12,6 @@ const config: AppConfig = {
   JWT_SECRET: "test-jwt-secret-that-is-long-enough-for-local-auth",
   ACCESS_TOKEN_TTL_SECONDS: 900,
   REFRESH_TOKEN_TTL_SECONDS: 2_592_000,
-  KEYCLOAK_USER_MIGRATION_ON_DEPLOY: false,
-  KEYCLOAK_USER_MIGRATION_FORCE_EMAIL: false,
   RESET_OTP_SECRET: "test-reset-otp-secret-that-is-long-enough",
   INITIAL_ADMIN_BOOTSTRAP_ON_START: false,
   RBAC_SYNC_ON_START: false,
@@ -27,7 +25,6 @@ const config: AppConfig = {
 function mockUser(overrides: Record<string, unknown> = {}) {
   return {
     id: "user-1",
-    keycloakId: null,
     email: "user@example.com",
     name: "User",
     passwordHash: null,
@@ -62,12 +59,11 @@ function mockPrisma(user: ReturnType<typeof mockUser>): AppPrisma {
 }
 
 describe("local auth service", () => {
-  it("adds local auth migration fields and keeps legacy Keycloak mapping optional", () => {
+  it("adds local auth migration fields", () => {
     const migration = readFileSync("prisma/migrations/20260606000000_local_auth_migration/migration.sql", "utf8");
     expect(migration).toContain('"passwordHash"');
     expect(migration).toContain('"passwordChangeRequired"');
     expect(migration).toContain('"temporaryPasswordSentAt"');
-    expect(migration).toContain('ALTER COLUMN "keycloakId" DROP NOT NULL');
     expect(migration).toContain('CREATE UNIQUE INDEX "User_email_key"');
   });
 

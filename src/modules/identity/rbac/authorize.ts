@@ -4,7 +4,6 @@ import { HttpError } from "../../../common/errors.js";
 
 export type AuthzUser = {
   id: string;
-  keycloakId: string | null;
   email: string;
   name?: string | null;
   roles: string[];

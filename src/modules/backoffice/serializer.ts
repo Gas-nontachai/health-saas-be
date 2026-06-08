@@ -21,7 +21,6 @@ export function serializeUser(user: Awaited<ReturnType<typeof findUserOrThrow>>)
 
   return {
     id: user.id,
-    keycloakId: user.keycloakId,
     email: user.email,
     name: user.name,
     profile: user.profile,

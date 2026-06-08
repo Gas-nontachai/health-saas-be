@@ -14,8 +14,6 @@ const config: AppConfig = {
   JWT_SECRET: "test-jwt-secret-that-is-long-enough-for-local-auth",
   ACCESS_TOKEN_TTL_SECONDS: 900,
   REFRESH_TOKEN_TTL_SECONDS: 2_592_000,
-  KEYCLOAK_USER_MIGRATION_ON_DEPLOY: false,
-  KEYCLOAK_USER_MIGRATION_FORCE_EMAIL: false,
   RESET_OTP_SECRET: "test-reset-otp-secret-that-is-long-enough",
   INITIAL_ADMIN_BOOTSTRAP_ON_START: false,
   RBAC_SYNC_ON_START: false,
@@ -30,7 +28,6 @@ function mockAuth(userId = "user-1", permissions: string[] = [...PERMISSION_CODE
   return async (request: FastifyRequest, _reply: FastifyReply) => {
     request.user = {
       id: userId,
-      keycloakId: "kc-1",
       email: "tester@example.com",
       name: "Tester",
       roles: ["Admin"],
@@ -1710,6 +1707,9 @@ describe("app", () => {
   });
 
   it("returns public shared link payload without authentication", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-08T00:00:00.000Z"));
+
     const prisma = mockPrisma();
     vi.mocked(prisma.sharedLink.findUnique).mockResolvedValue(
       {
@@ -1787,6 +1787,9 @@ describe("app", () => {
   });
 
   it("returns public shared link payload with selected weight data only", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-08T00:00:00.000Z"));
+
     const prisma = mockPrisma();
     vi.mocked(prisma.sharedLink.findUnique).mockResolvedValue(
       {
@@ -2331,7 +2334,6 @@ describe("app", () => {
     };
     const user = {
       id: "44444444-4444-4444-8444-444444444444",
-      keycloakId: "kc-user",
       email: "patient@example.com",
       name: "Patient",
       createdAt,

@@ -19,8 +19,6 @@ const config: AppConfig = {
   JWT_SECRET: "test-jwt-secret-that-is-long-enough-for-local-auth",
   ACCESS_TOKEN_TTL_SECONDS: 900,
   REFRESH_TOKEN_TTL_SECONDS: 2_592_000,
-  KEYCLOAK_USER_MIGRATION_ON_DEPLOY: false,
-  KEYCLOAK_USER_MIGRATION_FORCE_EMAIL: false,
   RESET_OTP_SECRET: "test-reset-otp-secret-that-is-long-enough",
   INITIAL_ADMIN_BOOTSTRAP_ON_START: false,
   RBAC_SYNC_ON_START: false,
@@ -39,7 +37,6 @@ function mockAuth(userId = "admin-1", permissions: string[] = ["backups.read.sys
   return async (request: FastifyRequest, _reply: FastifyReply) => {
     request.user = {
       id: userId,
-      keycloakId: null,
       email: "admin@example.com",
       name: "Admin",
       roles: ["Admin"],

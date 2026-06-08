@@ -19,17 +19,15 @@ npm run dev
 ```
 
 API จะรันที่ `http://localhost:3000`.
-Mailpit สำหรับดูอีเมล local จะอยู่ที่ `http://localhost:8025`.
 
 ## Auth Setup
 
 Backend ออก local JWT เองและเก็บ password hash ใน App DB. ตั้ง `JWT_SECRET` ให้เป็น secret อย่างน้อย 32 characters ใน production.
 
-Keycloak env ใช้เฉพาะช่วง import ผู้ใช้เดิมด้วย `KEYCLOAK_USER_MIGRATION_ON_DEPLOY=true`; runtime auth ไม่ verify token ผ่าน Keycloak แล้ว.
-Production deploy runs database migration, RBAC sync, and optional Keycloak user import through `npm run deploy:migrate` at container startup; `npm run build` does not connect to the database.
+Production deploy runs database migration and RBAC sync through `npm run deploy:migrate` before startup; `npm run build` does not connect to the database.
 
-ถ้าจะใช้ `/auth/password/forgot/request` ต้องตั้งค่า SMTP และ `RESET_OTP_SECRET` ใน `.env` ด้วย.
-ค่าใน `.env.example` ใช้ Mailpit จาก `docker-compose.yml` ได้ทันทีสำหรับ local development.
+ถ้าจะใช้ `/auth/password/forgot/request` ต้องตั้งค่า mail provider และ `RESET_OTP_SECRET` ใน `.env` ด้วย.
+ระบบส่งอีเมลผ่าน Resend เท่านั้น โดยใช้ `RESEND_API_KEY` + `MAIL_FROM`.
 
 ## Environment
 
@@ -39,9 +37,8 @@ Required:
 - `DIRECT_URL` for Prisma migrations when runtime uses a pooler connection
 - `JWT_SECRET`
 - `RESET_OTP_SECRET`
-- `SMTP_HOST`
-- `SMTP_PORT`
-- `SMTP_FROM`
+- `RESEND_API_KEY`
+- `MAIL_FROM`
 - `PORT`
 - `NODE_ENV`
 
@@ -49,15 +46,7 @@ Optional:
 
 - `ACCESS_TOKEN_TTL_SECONDS`
 - `REFRESH_TOKEN_TTL_SECONDS`
-- `KEYCLOAK_USER_MIGRATION_ON_DEPLOY`
-- `KEYCLOAK_USER_MIGRATION_FORCE_EMAIL`
-- `KEYCLOAK_BASE_URL`
-- `KEYCLOAK_REALM`
-- `KEYCLOAK_ADMIN_USERNAME`
-- `KEYCLOAK_ADMIN_PASSWORD`
-- `SMTP_USER`
-- `SMTP_PASSWORD`
-- `REDIS_URL`
+- `MAIL_TIMEOUT_MS`
 - `INITIAL_ADMIN_EMAIL`
 - `INITIAL_ADMIN_PASSWORD`
 - `INITIAL_ADMIN_BOOTSTRAP_ON_START`
@@ -157,7 +146,7 @@ curl -X POST http://localhost:3000/auth/password/forgot/confirm \
 เอา `access_token` ที่ได้ไปใช้กับ endpoint อื่น:
 
 ```http
-Authorization: Bearer <keycloak-access-token>
+Authorization: Bearer <access_token>
 ```
 
 Routes:

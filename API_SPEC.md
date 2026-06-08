@@ -213,7 +213,6 @@ Runtime ต้องมี `pg_dump` สำหรับ PostgreSQL dump. ถ้�
 ```json
 {
   "id": "uuid",
-  "keycloakId": "legacy-keycloak-uuid-or-null",
   "email": "user@example.com",
   "name": "สมชาย",
   "roles": ["User"],
@@ -1752,7 +1751,6 @@ Public endpoint สำหรับหน้า `/shared/{token}` ไม่ต้
   "data": [
     {
       "id": "uuid",
-      "keycloakId": "legacy-keycloak-uuid-or-null",
       "email": "user@example.com",
       "name": "สมชาย",
       "profile": {
@@ -1981,13 +1979,12 @@ backup_2026-06-04_0200.zip
 | Field | Type | Description |
 |---|---|---|
 | `id` | `String (UUID)` | Primary key |
-| `keycloakId` | `String?` | Legacy Keycloak subject สำหรับ mapping migration (unique, optional) |
 | `email` | `String` | Email สำหรับ local login (unique) |
 | `name` | `String?` | ชื่อผู้ใช้ |
 | `passwordHash` | `String?` | Local password hash |
 | `passwordChangeRequired` | `Boolean` | บังคับเปลี่ยนรหัสผ่านหลัง login |
 | `passwordChangedAt` | `DateTime?` | เวลาที่เปลี่ยนรหัสผ่านล่าสุด |
-| `migratedFrom` | `String?` | แหล่ง migration เช่น `keycloak` |
+| `migratedFrom` | `String?` | แหล่ง migration/import |
 | `migratedAt` | `DateTime?` | เวลาที่ migrate user |
 | `temporaryPasswordSentAt` | `DateTime?` | เวลาที่ส่ง temporary password ล่าสุด |
 | `createdAt` | `DateTime` | วันที่สร้าง |

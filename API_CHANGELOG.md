@@ -46,8 +46,8 @@ System owners need automated database backup that supports real restore through 
 - `POST /auth/register`, `POST /auth/login`, and `POST /auth/refresh` now return local token responses with `requiresPasswordChange` and `user`.
 - Added `POST /auth/password/change-required` for migrated users who must replace temporary passwords after first login.
 - Protected APIs return `403` with `PASSWORD_CHANGE_REQUIRED` when a user has not completed the required password change.
-- User records now store local auth fields while preserving optional legacy `keycloakId` for migration mapping.
-- Deploy startup now runs `npm run deploy:migrate`, which applies Prisma migrations, syncs RBAC, and optionally imports Keycloak users.
+- User records now store local auth fields.
+- Deploy startup now runs `npm run deploy:migrate`, which applies Prisma migrations and syncs RBAC.
 
 ### Why It Changed
 
@@ -67,7 +67,5 @@ The MVP no longer needs Keycloak as a runtime dependency. Local auth reduces inf
 
 ### Migration and Compatibility Notes
 
-- Existing `User.keycloakId` values are preserved as optional legacy IDs for import mapping.
-- Keycloak user import only runs when `KEYCLOAK_USER_MIGRATION_ON_DEPLOY=true`.
-- The import is idempotent: users are matched by legacy `keycloakId` or email, default roles/profile are ensured, and temporary password emails are not resent unless `KEYCLOAK_USER_MIGRATION_FORCE_EMAIL=true`.
+- Legacy one-time identity import scripts have been removed after the Supabase cutover.
 - Temporary passwords are sent via SMTP and are not logged.

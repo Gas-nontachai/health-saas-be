@@ -36,7 +36,7 @@ export async function findUsers(prisma: AppPrisma, query: UsersQuery) {
 }
 
 export async function findUserOrThrow(prisma: AppPrisma, id: string) { return prisma.user.findUniqueOrThrow({ where: { id }, include: userInclude }); }
-export async function findUserIdentityOrThrow(prisma: AppPrisma, id: string) { return prisma.user.findUniqueOrThrow({ where: { id }, select: { keycloakId: true, name: true } }); }
+export async function findUserIdentityOrThrow(prisma: AppPrisma, id: string) { return prisma.user.findUniqueOrThrow({ where: { id }, select: { name: true } }); }
 export async function updateUserIdentity(prisma: AppPrisma, id: string, data: { email?: string; name?: string }) { return prisma.user.update({ where: { id }, data }); }
 export async function upsertUserProfile(prisma: AppPrisma, userId: string, data: { weight?: number | null; height?: number | null }) { return prisma.profile.upsert({ where: { userId }, update: data, create: { userId, weight: data.weight, height: data.height } }); }
 export async function countRolesByIds(prisma: AppPrisma, roleIds: string[]) { return prisma.role.count({ where: { id: { in: roleIds } } }); }

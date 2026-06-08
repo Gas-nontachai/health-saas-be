@@ -5,7 +5,7 @@ import Fastify, { type FastifyInstance, type preHandlerHookHandler } from "fasti
 import type { AppConfig } from "./config/index.js";
 import { createAuthenticate } from "./modules/identity/auth/authenticate.js";
 import { createLocalAuthService, type LocalAuthService } from "./modules/identity/auth/local.js";
-import { createSmtpMailer, type Mailer } from "./modules/identity/auth/mailer.js";
+import { createResendMailer, type Mailer } from "./modules/identity/auth/mailer.js";
 import { createPasswordResetService, type PasswordResetService } from "./modules/identity/auth/password-reset.js";
 import { registerAuthRoutes } from "./modules/identity/auth/routes.js";
 import { registerBackofficeRoutes } from "./modules/backoffice/routes.js";
@@ -60,7 +60,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 
   app.decorate("authenticate", options.authenticate ?? createAuthenticate(options.config, options.prisma));
   const localAuth = options.localAuth ?? createLocalAuthService(options.config, options.prisma);
-  const mailer = options.mailer ?? createSmtpMailer(options.config);
+  const mailer = options.mailer ?? createResendMailer(options.config);
   const passwordReset = options.passwordReset ?? createPasswordResetService(options.config, options.prisma, mailer);
   const shouldSyncPermissions = options.syncPermissionsOnStart ?? options.config.RBAC_SYNC_ON_START;
 
