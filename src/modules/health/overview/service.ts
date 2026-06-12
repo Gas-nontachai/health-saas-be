@@ -1,6 +1,6 @@
 import type { AppPrisma } from "../../../infra/prisma.js";
 import { HttpError } from "../../../common/errors.js";
-import { buildExcel, buildPdf, buildUnifiedHealthExcel, buildUnifiedHealthPdf, buildWeightProgressExcel, buildWeightProgressPdf, type ExportContext, type WeightProgressContext } from "../export/builders.js";
+import { buildHealthReportFilename, buildUnifiedHealthExcel, buildUnifiedHealthPdf, type ExportContext, type WeightProgressContext } from "../export/builders.js";
 import { findBloodSugarRecords, getBloodSugarExportData } from "../blood-sugar/service.js";
 import { buildWeightForecastResponse, findAllWeightEntriesForExport, findWeightEntries, findWeightGoal } from "../weight/service.js";
 import { DEFAULT_HEALTH_DASHBOARD_WIDGETS, HEALTH_DASHBOARD_WIDGETS, type BloodSugarHealthWidgetKey, type WeightWidgetKey, type WidgetKey } from "../dashboard/constants.js";
@@ -95,9 +95,17 @@ export async function buildHealthExport(prisma: AppPrisma, user: { id: string; n
   const exportedAt = new Date();
   const bloodContext: ExportContext = { patientName: user.name ?? user.email, patientEmail: user.email, weight: bloodData.profile?.weight ?? null, height: bloodData.profile?.height ?? null, exportedAt };
   const weightContext: WeightProgressContext = { patientName: user.name ?? user.email, patientEmail: user.email, exportedAt };
-  if (wantsBloodSugar && !wantsWeight) return { buffer: query.type === "excel" ? await buildExcel(bloodData.records, bloodContext) : await buildPdf(bloodData.records, bloodContext), filename: query.type === "excel" ? "blood-sugar-records.xlsx" : "blood-sugar-records.pdf" };
-  if (wantsWeight && !wantsBloodSugar) return { buffer: query.type === "excel" ? await buildWeightProgressExcel(weightEntries, weightGoal, weightContext) : await buildWeightProgressPdf(weightEntries, weightGoal, weightContext), filename: query.type === "excel" ? "weight-progress-report.xlsx" : "weight-progress-report.pdf" };
-  const input = { bloodSugar: { records: bloodData.records, context: bloodContext }, weight: { entries: weightEntries, goal: weightGoal, context: weightContext }, exportedAt, patientName: user.name ?? user.email, patientEmail: user.email };
-  return { buffer: query.type === "excel" ? await buildUnifiedHealthExcel(input) : await buildUnifiedHealthPdf(input), filename: query.type === "excel" ? "health-report.xlsx" : "health-report.pdf" };
+  const input = {
+    dataTypes: query.dataTypes,
+    ...(wantsBloodSugar ? { bloodSugar: { records: bloodData.records, context: bloodContext } } : {}),
+    ...(wantsWeight ? { weight: { entries: weightEntries, goal: weightGoal, context: weightContext } } : {}),
+    exportedAt,
+    patientName: user.name ?? user.email,
+    patientEmail: user.email
+  };
+  return {
+    buffer: query.type === "excel" ? await buildUnifiedHealthExcel(input) : await buildUnifiedHealthPdf(input),
+    filename: buildHealthReportFilename(query.dataTypes, query.type, exportedAt)
+  };
 }
 export function exportContentType(type: "excel" | "pdf") { return type === "excel" ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/pdf"; }

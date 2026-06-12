@@ -1,9 +1,9 @@
 import type { FastifyInstance } from "fastify";
-import { buildExcel, buildPdf, type ExportContext } from "../export/builders.js";
 import type { AppPrisma } from "../../../infra/prisma.js";
 import { requirePermission } from "../../identity/rbac/authorize.js";
 import { createRecordSchema, dashboardQuerySchema, exportQuerySchema, idParamsSchema, paginationSchema, updateRecordSchema } from "./schemas.js";
-import { createUserBloodSugarRecord, deleteUserBloodSugarRecord, findBloodSugarRecords, getBloodSugarExportData, listBloodSugarEntries, updateUserBloodSugarRecord } from "./service.js";
+import { buildLegacyBloodSugarExport, legacyBloodSugarExportHeaders } from "../export/service.js";
+import { createUserBloodSugarRecord, deleteUserBloodSugarRecord, findBloodSugarRecords, listBloodSugarEntries, updateUserBloodSugarRecord } from "./service.js";
 
 export async function registerHealthBloodSugarRoutes(app: FastifyInstance, prisma: AppPrisma): Promise<void> {
   app.get("/health/blood-sugar/entries", { preHandler: [app.authenticate, requirePermission("records.read.self")] }, async (request) => listBloodSugarEntries(prisma, request.user.id, paginationSchema.parse(request.query)));
@@ -13,9 +13,9 @@ export async function registerHealthBloodSugarRoutes(app: FastifyInstance, prism
   app.get("/health/blood-sugar/dashboard", { preHandler: [app.authenticate, requirePermission("dashboard.read.self")] }, async (request) => { const { range } = dashboardQuerySchema.parse(request.query); const records = await findBloodSugarRecords(prisma, request.user.id, range); return { range, dataType: "bloodSugar", records }; });
   app.get("/health/blood-sugar/export", { preHandler: [app.authenticate, requirePermission("export.read.self")] }, async (request, reply) => {
     const { type } = exportQuerySchema.parse(request.query);
-    const { records, profile } = await getBloodSugarExportData(prisma, request.user.id);
-    const ctx: ExportContext = { patientName: request.user.name ?? request.user.email, patientEmail: request.user.email, weight: profile?.weight ?? null, height: profile?.height ?? null, exportedAt: new Date() };
-    if (type === "excel") { const buffer = await buildExcel(records, ctx); reply.header("content-type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet").header("content-disposition", "attachment; filename=\"blood-sugar-records.xlsx\""); return buffer; }
-    const buffer = await buildPdf(records, ctx); reply.header("content-type", "application/pdf").header("content-disposition", "attachment; filename=\"blood-sugar-records.pdf\""); return buffer;
+    const { buffer, filename } = await buildLegacyBloodSugarExport(prisma, request.user, type);
+    const headers = legacyBloodSugarExportHeaders(type, filename);
+    reply.header("content-type", headers.contentType).header("content-disposition", headers.disposition);
+    return buffer;
   });
 }

@@ -1049,6 +1049,7 @@ describe("app", () => {
   });
 
   it("exports excel workbooks and marks unmeasured records", async () => {
+    vi.setSystemTime(new Date("2026-06-12T03:00:00.000Z"));
     const prisma = mockPrisma();
     vi.mocked(prisma.record.findMany).mockResolvedValue([
       {
@@ -1072,26 +1073,32 @@ describe("app", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("spreadsheetml.sheet");
+    expect(response.headers["content-disposition"]).toContain("blood-sugar-report-20260612.xlsx");
     expect(response.rawPayload.length).toBeGreaterThan(0);
 
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(response.rawPayload);
     const summary = workbook.getWorksheet("Summary");
-    const records = workbook.getWorksheet("Records");
+    const records = workbook.getWorksheet("Blood Sugar Data");
 
-    expect(summary?.getCell("B9").value).toBe(2);
-    expect(summary?.getCell("B10").value).toBe(1);
-    expect(summary?.getCell("B11").value).toBe(120);
-    expect(records?.getCell("D2").value).toBe(0);
-    expect(records?.getCell("E2").value).toBe("Not measured");
-    expect(records?.getCell("E3").value).toBe("Normal");
-    expect(records?.getCell("H2").value).toBe("วัดไม่ได้ อาหารเย็น");
-    expect(records?.getCell("H2").alignment?.wrapText).toBe(true);
-    expect(records?.getCell("H2").alignment?.vertical).toBe("top");
+    expect(summary?.getCell("A1").value).toBe("Blood Sugar Report");
+    expect(summary?.getCell("B3").value).toBe("Blood Sugar Report");
+    expect(summary?.getCell("B4").value).toBe("Blood Sugar");
+    expect(summary?.getCell("B8").value).toBe("12 Jun 2026 10:00 ICT");
+    expect(summary?.getCell("B12").value).toBe("120 mg/dL");
+    expect(summary?.getCell("B13").value).toBe("120 mg/dL");
+    expect(records?.getCell("A1").value).toBe("Date");
+    expect(records?.getCell("B1").value).toBe("Time");
+    expect(records?.getCell("C1").value).toBe("Reading");
+    expect(records?.getCell("D1").value).toBe("Status");
+    expect(records?.getCell("C2").value).toBe(0);
+    expect(records?.getCell("D2").value).toBe("Not measured");
+    expect(records?.getCell("D3").value).toBe("Normal");
     await app.close();
   });
 
   it("exports weight progress excel reports with summary and log sheets", async () => {
+    vi.setSystemTime(new Date("2026-06-12T03:00:00.000Z"));
     const prisma = mockPrisma();
     vi.mocked(prisma.healthGoal.findUnique).mockResolvedValue(mockHealthGoal() as never);
     vi.mocked(prisma.healthMetricEntry.findMany).mockResolvedValue([
@@ -1105,26 +1112,27 @@ describe("app", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("spreadsheetml.sheet");
-    expect(response.headers["content-disposition"]).toContain("weight-progress-report.xlsx");
+    expect(response.headers["content-disposition"]).toContain("weight-report-20260612.xlsx");
 
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(response.rawPayload);
     const summary = workbook.getWorksheet("Summary");
-    const log = workbook.getWorksheet("Weight Log");
+    const log = workbook.getWorksheet("Weight Data");
 
     expect(summary?.getCell("A1").value).toBe("Weight Progress Report");
-    expect(summary?.getCell("B3").value).toBe("Tester");
-    expect(summary?.getCell("B4").value).toBe("tester@example.com");
-    expect(summary?.getCell("B9").value).toBe("2026-06-01 / 150 kg");
-    expect(summary?.getCell("B14").value).toBe("ahead");
-    expect(log?.getCell("B1").value).toBe("Date");
-    expect(log?.getCell("C1").value).toBe("Weight (kg)");
-    expect(log?.getCell("D1").value).toBe("7-Day Average");
-    expect(log?.getCell("E1").value).toBe("Forecast (kg)");
-    expect(log?.getCell("F1").value).toBe("Delta vs Forecast");
-    expect(log?.getCell("B4").value).toBe("2026-06-03");
-    expect(log?.getCell("C4").value).toBe(148);
-    expect(log?.getCell("D4").value).toBe(149);
+    expect(summary?.getCell("B3").value).toBe("Weight Progress Report");
+    expect(summary?.getCell("B4").value).toBe("Weight");
+    expect(summary?.getCell("B5").value).toBe("Tester");
+    expect(summary?.getCell("B8").value).toBe("12 Jun 2026 10:00 ICT");
+    expect(summary?.getCell("B12").value).toBe("148 kg");
+    expect(log?.getCell("A1").value).toBe("Date");
+    expect(log?.getCell("B1").value).toBe("Weight");
+    expect(log?.getCell("C1").value).toBe("7-Day Average");
+    expect(log?.getCell("D1").value).toBe("Forecast");
+    expect(log?.getCell("E1").value).toBe("Delta");
+    expect(log?.getCell("A4").value).toBe("2026-06-03");
+    expect(log?.getCell("B4").value).toBe(148);
+    expect(log?.getCell("C4").value).toBe(149);
     await app.close();
   });
 
@@ -1142,7 +1150,7 @@ describe("app", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("application/pdf");
-    expect(response.headers["content-disposition"]).toContain("weight-progress-report.pdf");
+    expect(response.headers["content-disposition"]).toContain("weight-report-");
     expect(countPdfPages(response.rawPayload)).toBe(1);
     expect(getFirstPdfMediaBox(response.rawPayload)).toMatchObject({ width: 595.28, height: 841.89 });
     await app.close();
@@ -1162,12 +1170,12 @@ describe("app", () => {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(response.rawPayload);
     const summary = workbook.getWorksheet("Summary");
-    const log = workbook.getWorksheet("Weight Log");
+    const log = workbook.getWorksheet("Weight Data");
 
-    expect(summary?.getCell("B9").value).toBe("insufficient_data");
-    expect(summary?.getCell("B12").value).toBe("insufficient_data");
+    expect(summary?.getCell("B12").value).toBe("149 kg");
+    expect(summary?.getCell("B14").value).toBe("-");
+    expect(log?.getCell("D2").value).toBe("-");
     expect(log?.getCell("E2").value).toBe("-");
-    expect(log?.getCell("F2").value).toBe("-");
     await app.close();
   });
 
@@ -1182,11 +1190,11 @@ describe("app", () => {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(response.rawPayload);
     const summary = workbook.getWorksheet("Summary");
-    const log = workbook.getWorksheet("Weight Log");
+    const log = workbook.getWorksheet("Weight Data");
 
     expect(summary?.getCell("B6").value).toBe("-");
-    expect(summary?.getCell("B14").value).toBe("insufficient_data");
-    expect(summary?.getCell("B15").value).toBe("No weight entries found.");
+    expect(summary?.getCell("B12").value).toBe("-");
+    expect(summary?.getCell("B15").value).toBe("-");
     expect(log?.actualRowCount).toBe(1);
     await app.close();
   });
@@ -1430,6 +1438,7 @@ describe("app", () => {
   });
 
   it("exports unified health excel reports with selected blood sugar and weight data", async () => {
+    vi.setSystemTime(new Date("2026-06-12T03:00:00.000Z"));
     const prisma = mockPrisma();
     vi.mocked(prisma.record.findMany).mockResolvedValue([
       { datetime: new Date("2026-06-01T08:00:00.000Z"), bloodSugar: 120, medMorning: 1, medEvening: null, note: null }
@@ -1442,15 +1451,57 @@ describe("app", () => {
     ] as never);
     const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
 
-    const response = await app.inject({ method: "GET", url: "/health/export?type=excel&dataTypes=bloodSugar,weight" });
+    const response = await app.inject({ method: "GET", url: "/health/export?type=excel&dataTypes=weight,bloodSugar" });
 
     expect(response.statusCode).toBe(200);
-    expect(response.headers["content-disposition"]).toContain("health-report.xlsx");
+    expect(response.headers["content-disposition"]).toContain("health-report-20260612.xlsx");
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(response.rawPayload);
-    expect(workbook.getWorksheet("Summary")).toBeTruthy();
+    expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual(["Overview", "Weight", "Blood Sugar"]);
+    const overview = workbook.getWorksheet("Overview");
+    expect(overview?.getCell("A1").value).toBe("Health Report");
+    expect(overview?.getCell("B4").value).toBe("Weight, Blood Sugar");
+    expect(overview?.getCell("A11").value).toBe("Metric");
+    expect(overview?.getCell("A12").value).toBe("Weight");
+    expect(overview?.getCell("A13").value).toBe("Blood Sugar");
     expect(workbook.getWorksheet("Blood Sugar")).toBeTruthy();
-    expect(workbook.getWorksheet("Weight Progress")).toBeTruthy();
+    expect(workbook.getWorksheet("Weight")).toBeTruthy();
+    await app.close();
+  });
+
+  it("exports canonical health blood sugar excel reports with standard filenames and sheets", async () => {
+    vi.setSystemTime(new Date("2026-06-12T03:00:00.000Z"));
+    const prisma = mockPrisma();
+    vi.mocked(prisma.record.findMany).mockResolvedValue([
+      { datetime: new Date("2026-06-01T08:00:00.000Z"), bloodSugar: 120, medMorning: 1, medEvening: null, note: null }
+    ] as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/health/export?type=excel&dataTypes=bloodSugar" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-disposition"]).toContain("blood-sugar-report-20260612.xlsx");
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(response.rawPayload);
+    expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual(["Summary", "Blood Sugar Data"]);
+    expect(workbook.getWorksheet("Summary")?.getCell("B4").value).toBe("Blood Sugar");
+    await app.close();
+  });
+
+  it("exports canonical health weight pdf reports with standard filenames", async () => {
+    vi.setSystemTime(new Date("2026-06-12T03:00:00.000Z"));
+    const prisma = mockPrisma();
+    vi.mocked(prisma.healthGoal.findUnique).mockResolvedValue(mockHealthGoal() as never);
+    vi.mocked(prisma.healthMetricEntry.findMany).mockResolvedValue([mockHealthMetricEntry("2026-06-01", 150, 1)] as never);
+    const app = await buildApp({ config, prisma, authenticate: mockAuth("user-1"), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/health/export?type=pdf&dataTypes=weight" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("application/pdf");
+    expect(response.headers["content-disposition"]).toContain("weight-report-20260612.pdf");
+    expect(countPdfPages(response.rawPayload)).toBe(1);
+    expect(response.rawPayload.toString("latin1")).toContain("/FontFile");
     await app.close();
   });
 

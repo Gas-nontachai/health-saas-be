@@ -1004,7 +1004,7 @@ Every widget result uses `{ "status": "ok" | "insufficient_data", "message"?: st
 
 #### `GET /health/export`
 
-Unified export endpoint. FE selects report sections with `dataTypes`.
+Canonical Health Report export endpoint. FE selects report sections with `dataTypes`; the same report structure is used for single-metric and multi-metric exports.
 
 **Headers:** `Authorization: Bearer <token>`
 
@@ -1018,9 +1018,38 @@ Unified export endpoint. FE selects report sections with `dataTypes`.
 | `dataTypes` | `string` | ❌ | comma-separated; default `bloodSugar` |
 
 **Filenames:**
-- `bloodSugar` only: `blood-sugar-records.xlsx` / `blood-sugar-records.pdf`
-- `weight` only: `weight-progress-report.xlsx` / `weight-progress-report.pdf`
-- both: `health-report.xlsx` / `health-report.pdf`
+- `bloodSugar` only: `blood-sugar-report-{yyyyMMdd}.xlsx` / `blood-sugar-report-{yyyyMMdd}.pdf`
+- `weight` only: `weight-report-{yyyyMMdd}.xlsx` / `weight-report-{yyyyMMdd}.pdf`
+- multiple metrics: `health-report-{yyyyMMdd}.xlsx` / `health-report-{yyyyMMdd}.pdf`
+
+`yyyyMMdd` uses `Asia/Bangkok` date. `Generated At` displays `DD Mon YYYY HH:mm ICT`.
+
+**Report Metadata:** every PDF and Excel export includes `Report Type`, `Metrics Included`, `Patient Name`, `Period Start`, `Period End`, `Generated At`, and `Time Zone`. The period is derived from exported data. If a selected metric has no rows, its period is `-`.
+
+**Excel Structure:**
+
+| Export | Sheets |
+|---|---|
+| Single metric | `Summary`, `{Metric} Data` เช่น `Blood Sugar Data`, `Weight Data` |
+| Multiple metrics | `Overview`, then one sheet per metric in request order เช่น `Weight`, `Blood Sugar` |
+
+`Overview` contains report metadata and executive summary columns: `Metric`, `Latest Value`, `Status`.
+
+**PDF Structure:**
+
+| Export | Layout |
+|---|---|
+| Single metric | Standard header, metadata, metric summary, detail table |
+| Multiple metrics | Cover page with metadata, executive summary, then one separate section per metric in request order |
+
+**Metric Sections:**
+
+| Metric | Summary | Detail Columns |
+|---|---|---|
+| Weight | Current Weight, Change, Goal Weight, Progress | Date, Weight, 7-Day Average, Forecast, Delta |
+| Blood Sugar | Latest Reading, Average Reading, Highest Reading, Lowest Reading | Date, Time, Reading, Status |
+
+Compatibility endpoints `/export`, `/health/blood-sugar/export`, `/health/weight/export`, and `/health-progress/export/weight` return the same standardized report layout and filename rules.
 
 #### Blood Sugar Canonical Endpoints
 
@@ -1295,7 +1324,7 @@ Main dashboard endpoint สำหรับ Forecast vs Actual
 
 #### `GET /health-progress/export/weight`
 
-Export Weight Progress Report เป็น Excel หรือ PDF โดยเน้น Forecast vs Actual, trend, ETA, goal progress และ daily weight log
+Compatibility endpoint for Weight Health Report export. New FE work should use `GET /health/export?dataTypes=weight`.
 
 **Headers:** `Authorization: Bearer <token>`
 
@@ -1318,7 +1347,7 @@ Export Weight Progress Report เป็น Excel หรือ PDF โดยเ�
 
 ```
 Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
-Content-Disposition: attachment; filename="weight-progress-report.xlsx"
+Content-Disposition: attachment; filename="weight-report-20260612.xlsx"
 ```
 
 Body: binary Excel file — มี 2 sheets:
@@ -1327,32 +1356,32 @@ Body: binary Excel file — มี 2 sheets:
 
 | Row | Description |
 |---|---|
+| Report Type | `Weight Progress Report` |
+| Metrics Included | `Weight` |
 | Patient Name | ชื่อผู้ใช้ |
-| Email | อีเมล |
-| Export Date | วันที่ export |
-| Report Period | ช่วงวันที่ของ weight entries |
-| Goal | start date/value, target date/value, target change |
-| Progress | status, current/lowest/highest weight, total change, trend, ETA, progress %, forecast comparison |
+| Period Start / Period End | derived จาก weight entries |
+| Generated At | เวลา export ใน `ICT` |
+| Time Zone | `Asia/Bangkok` |
+| Current Weight / Change / Goal Weight / Progress | สรุป weight report |
 
-**Sheet 2: Weight Log**
+**Sheet 2: Weight Data**
 
 | Column | Description |
 |---|---|
-| # | ลำดับ |
-| Date | วันที่ (YYYY-MM-DD) |
-| Weight (kg) | น้ำหนักที่บันทึก |
+| Date | วันที่ |
+| Weight | น้ำหนักที่บันทึก |
 | 7-Day Average | rolling average จาก entries ที่มี |
-| Forecast (kg) | forecast value ของวันนั้น ถ้ามี goal |
-| Delta vs Forecast | actual - forecast ถ้ามี goal |
+| Forecast | forecast value ของวันนั้น ถ้ามี goal |
+| Delta | actual - forecast ถ้ามี goal |
 
 **Response (PDF)** `200 OK`
 
 ```
 Content-Type: application/pdf
-Content-Disposition: attachment; filename="weight-progress-report.pdf"
+Content-Disposition: attachment; filename="weight-report-20260612.pdf"
 ```
 
-Body: binary PDF file (A4 portrait) — มี patient header, goal/progress summary, daily weight table และ page footer
+Body: binary PDF file (A4 portrait) — มี standard report header, metadata, summary และ detail table
 
 ---
 
@@ -1360,12 +1389,12 @@ Body: binary PDF file (A4 portrait) — มี patient header, goal/progress sum
 
 #### `GET /export`
 
-Export records เป็นรายงานสำหรับแพทย์/พยาบาล ในรูปแบบ Excel หรือ PDF (สูงสุด 1,000 records เรียงตาม datetime ASC)
+Compatibility endpoint for Blood Sugar Health Report export. New FE work should use `GET /health/export?dataTypes=bloodSugar`.
 
 รายงานประกอบด้วย:
-- **ข้อมูลผู้ป่วย** — ชื่อ, email, น้ำหนัก, ส่วนสูง
-- **สรุปสถิติ** — จำนวน record ทั้งหมด, จำนวน measured records, ค่าเฉลี่ย, ค่าต่ำสุด/สูงสุด, จำนวน Normal/Low/High (ไม่รวม `bloodSugar: 0`)
-- **ตาราง records** — แบ่งคอลัมน์ชัดเจน พร้อม color-coded status
+- **Metadata** — Report Type, Metrics Included, Patient Name, Period Start/End, Generated At, Time Zone
+- **Summary** — Latest Reading, Average Reading, Highest Reading, Lowest Reading
+- **Detail Table** — Date, Time, Reading, Status
 
 **Blood Sugar Classification:**
 
@@ -1388,7 +1417,7 @@ Export records เป็นรายงานสำหรับแพทย์/�
 
 ```
 Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
-Content-Disposition: attachment; filename="blood-sugar-records.xlsx"
+Content-Disposition: attachment; filename="blood-sugar-report-20260612.xlsx"
 ```
 
 Body: binary Excel file — มี 2 sheets:
@@ -1397,28 +1426,22 @@ Body: binary Excel file — มี 2 sheets:
 
 | Row | Description |
 |---|---|
+| Report Type | `Blood Sugar Report` |
+| Metrics Included | `Blood Sugar` |
 | Patient Name | ชื่อผู้ป่วย |
-| Email | อีเมล |
-| Weight / Height | น้ำหนัก / ส่วนสูง (ถ้ามี) |
-| Export Date | วันที่ export |
-| Date Range | ช่วงเวลาของ records |
-| Total Records | จำนวน records ทั้งหมด |
-| Measured Records | จำนวน records ที่มีการเจาะตรวจจริง (`bloodSugar > 0`) |
-| Average / Min / Max | ค่าเฉลี่ย, ต่ำสุด, สูงสุด (mg/dL) จาก measured records เท่านั้น |
-| Normal / Low / High | จำนวนและเปอร์เซ็นต์แต่ละระดับจาก measured records เท่านั้น |
+| Period Start / Period End | derived จาก records |
+| Generated At | เวลา export ใน `ICT` |
+| Time Zone | `Asia/Bangkok` |
+| Latest / Average / Highest / Lowest Reading | สรุปค่าน้ำตาลจาก measured records (`bloodSugar > 0`) |
 
-**Sheet 2: Records**
+**Sheet 2: Blood Sugar Data**
 
 | Column | Description |
 |---|---|
-| # | ลำดับ |
-| Date | วันที่ (YYYY-MM-DD) |
-| Time (UTC) | เวลา (HH:MM:SS) |
-| Blood Sugar (mg/dL) | ค่าน้ำตาลในเลือด |
+| Date | วันที่ |
+| Time | เวลา |
+| Reading | ค่าน้ำตาลในเลือด |
 | Status | Not measured / Low / Normal / High (color-coded) |
-| Morning Med | ยาเช้า |
-| Evening Med | ยาเย็น |
-| Note | หมายเหตุ |
 
 > Excel มี auto-filter, freeze header row, alternate row shading, cell borders
 
@@ -1426,10 +1449,10 @@ Body: binary Excel file — มี 2 sheets:
 
 ```
 Content-Type: application/pdf
-Content-Disposition: attachment; filename="blood-sugar-records.pdf"
+Content-Disposition: attachment; filename="blood-sugar-report-20260612.pdf"
 ```
 
-Body: binary PDF file (A4 landscape) — มี header ข้อมูลผู้ป่วย, สรุปสถิติ, ตาราง records พร้อม color-coded status, page number footer ทุกหน้า
+Body: binary PDF file (A4 portrait) — มี standard report header, metadata, summary และ detail table
 
 ---
 
