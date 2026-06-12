@@ -1026,6 +1026,8 @@ Canonical Health Report export endpoint. FE selects report sections with `dataTy
 
 **Report Metadata:** every PDF and Excel export includes `Report Type`, `Metrics Included`, `Patient Name`, `Period Start`, `Period End`, `Generated At`, and `Time Zone`. The period is derived from exported data. If a selected metric has no rows, its period is `-`.
 
+`Content-Disposition` is exposed through CORS so browser clients can read the backend-generated filename.
+
 **Excel Structure:**
 
 | Export | Sheets |

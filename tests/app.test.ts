@@ -219,6 +219,15 @@ describe("app", () => {
     await app.close();
   });
 
+  it("exposes content-disposition to browser clients for export filenames", async () => {
+    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth(), logger: false });
+
+    const response = await app.inject({ method: "GET", url: "/health", headers: { origin: "http://localhost:5173" } });
+
+    expect(response.headers["access-control-expose-headers"]).toContain("Content-Disposition");
+    await app.close();
+  });
+
   it("syncs the RBAC catalog on app start when enabled", async () => {
     const prisma = mockPrisma();
     const syncPermissions = vi.fn().mockResolvedValue(undefined);

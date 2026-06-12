@@ -48,7 +48,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await app.register(cors, {
     origin: true,
     credentials: true,
-    methods: ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+    methods: ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    exposedHeaders: ["Content-Disposition"]
   });
   await app.register(helmet, {
     crossOriginResourcePolicy: { policy: "cross-origin" }
