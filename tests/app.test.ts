@@ -14,6 +14,13 @@ const config: AppConfig = {
   JWT_SECRET: "test-jwt-secret-that-is-long-enough-for-local-auth",
   ACCESS_TOKEN_TTL_SECONDS: 900,
   REFRESH_TOKEN_TTL_SECONDS: 2_592_000,
+  AUTH_ALLOWED_ORIGINS: "http://localhost:5173",
+  AUTH_REFRESH_COOKIE_NAME: "refresh_token",
+  AUTH_REFRESH_COOKIE_PATH: "/auth",
+  AUTH_REFRESH_COOKIE_SAME_SITE: "lax",
+  AUTH_REFRESH_COOKIE_SECURE: false,
+  AUTH_LEGACY_JSON_REFRESH_ENABLED: true,
+  AUTH_SESSION_CLEANUP_RETENTION_SECONDS: 604800,
   RESET_OTP_SECRET: "test-reset-otp-secret-that-is-long-enough",
   INITIAL_ADMIN_BOOTSTRAP_ON_START: false,
   RBAC_SYNC_ON_START: false,
@@ -123,6 +130,9 @@ function mockLocalAuth() {
     register: vi.fn(),
     login: vi.fn(),
     refreshToken: vi.fn(),
+    refreshLegacyToken: vi.fn(),
+    logout: vi.fn(),
+    cleanupExpiredSessions: vi.fn(),
     resetPassword: vi.fn(),
     changeRequiredPassword: vi.fn()
   };
@@ -265,14 +275,13 @@ describe("app", () => {
 
   it("registers users through local auth and returns tokens", async () => {
     const localAuth = mockLocalAuth();
-    localAuth.register.mockResolvedValue({
+    localAuth.register.mockResolvedValue({ refreshToken: "refresh-token", response: {
       access_token: "access-token",
       expires_in: 300,
-      refresh_token: "refresh-token",
       requiresPasswordChange: false,
       user: { id: "user-1", email: "tester@example.com", name: "Tester", roles: [], permissions: [] },
       token_type: "Bearer"
-    });
+    }});
     const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth(), localAuth, logger: false });
 
     const response = await app.inject({
@@ -304,14 +313,13 @@ describe("app", () => {
 
   it("logs users in through local auth and returns tokens", async () => {
     const localAuth = mockLocalAuth();
-    localAuth.login.mockResolvedValue({
+    localAuth.login.mockResolvedValue({ refreshToken: "refresh-token", response: {
       access_token: "access-token",
       expires_in: 300,
-      refresh_token: "refresh-token",
       requiresPasswordChange: true,
       user: { id: "user-1", email: "tester@example.com", name: "Tester", roles: ["User"], permissions: ["auth.read.self"] },
       token_type: "Bearer"
-    });
+    }});
     const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth(), localAuth, logger: false });
 
     const response = await app.inject({
@@ -334,6 +342,75 @@ describe("app", () => {
       email: "tester@example.com",
       password: "password123"
     });
+    await app.close();
+  });
+
+  it("uses the cookie-v1 login contract without exposing the refresh token", async () => {
+    const localAuth = mockLocalAuth();
+    localAuth.login.mockResolvedValue({
+      refreshToken: "opaque-refresh-token",
+      response: { access_token: "access-token", expires_in: 900, token_type: "Bearer", requiresPasswordChange: false, user: { id: "user-1", email: "tester@example.com", name: "Tester", roles: [], permissions: [] } }
+    });
+    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth(), localAuth, logger: false });
+    const response = await app.inject({ method: "POST", url: "/auth/login", headers: { "x-auth-contract": "cookie-v1" }, payload: { email: "tester@example.com", password: "password123" } });
+
+    expect(response.json()).not.toHaveProperty("refresh_token");
+    expect(response.headers["set-cookie"]).toContain("refresh_token=opaque-refresh-token");
+    expect(response.headers["set-cookie"]).toContain("HttpOnly");
+    expect(response.headers["set-cookie"]).toContain("Path=/auth");
+    await app.close();
+  });
+
+  it("refreshes from the cookie, rotates it, and rejects a body token in cookie-v1", async () => {
+    const localAuth = mockLocalAuth();
+    localAuth.refreshToken.mockResolvedValue({
+      refreshToken: "rotated-token",
+      response: { access_token: "new-access", expires_in: 900, token_type: "Bearer", requiresPasswordChange: false, user: { id: "user-1", email: "tester@example.com", name: "Tester", roles: [], permissions: [] } }
+    });
+    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth(), localAuth, logger: false });
+    const response = await app.inject({ method: "POST", url: "/auth/refresh", headers: { origin: "http://localhost:5173", "x-auth-contract": "cookie-v1", cookie: "refresh_token=current-token" }, payload: { refreshToken: "body-token" } });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).not.toHaveProperty("refresh_token");
+    expect(localAuth.refreshToken).toHaveBeenCalledWith("current-token");
+    expect(response.headers["set-cookie"]).toContain("rotated-token");
+    await app.close();
+  });
+
+  it("preserves the legacy JSON refresh contract while the rollout flag is enabled", async () => {
+    const localAuth = mockLocalAuth();
+    localAuth.refreshToken.mockResolvedValue({
+      refreshToken: "legacy-rotated",
+      response: { access_token: "access", expires_in: 900, token_type: "Bearer", requiresPasswordChange: false, user: { id: "user-1", email: "tester@example.com", name: null, roles: [], permissions: [] } }
+    });
+    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth(), localAuth, logger: false });
+    const response = await app.inject({ method: "POST", url: "/auth/refresh", headers: { origin: "http://localhost:5173" }, payload: { refreshToken: "legacy-opaque-token" } });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().refresh_token).toBe("legacy-rotated");
+    expect(localAuth.refreshToken).toHaveBeenCalledWith("legacy-opaque-token");
+    await app.close();
+  });
+
+  it("clears the cookie and returns 401 when reuse is detected", async () => {
+    const localAuth = mockLocalAuth();
+    localAuth.refreshToken.mockResolvedValue({ reuseDetected: true });
+    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth(), localAuth, logger: false });
+    const response = await app.inject({ method: "POST", url: "/auth/refresh", headers: { origin: "http://localhost:5173", "x-auth-contract": "cookie-v1", cookie: "refresh_token=reused" } });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.headers["set-cookie"]).toContain("Max-Age=0");
+    await app.close();
+  });
+
+  it("logs out idempotently and validates the request origin", async () => {
+    const localAuth = mockLocalAuth();
+    const app = await buildApp({ config, prisma: mockPrisma(), authenticate: mockAuth(), localAuth, logger: false });
+    const forbidden = await app.inject({ method: "POST", url: "/auth/logout", headers: { origin: "https://evil.example", cookie: "refresh_token=token" } });
+    expect(forbidden.statusCode).toBe(403);
+    const response = await app.inject({ method: "POST", url: "/auth/logout", headers: { origin: "http://localhost:5173" } });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["set-cookie"]).toContain("Max-Age=0");
     await app.close();
   });
 

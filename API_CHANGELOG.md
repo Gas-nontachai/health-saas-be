@@ -1,5 +1,36 @@
 # API Changelog
 
+## 2026-08-07 — HttpOnly Refresh Sessions and Rotation
+
+### What Changed
+
+- Added PostgreSQL `RefreshSession` records containing only SHA-256 token hashes, token family, expiry, used and revoked timestamps.
+- Login/register now set an opaque 256-bit refresh-token cookie. Cookie-v1 responses expose only the 900-second Bearer access token.
+- `POST /auth/refresh` atomically consumes each token once, rotates it, detects reuse and revokes the whole family. Added idempotent `POST /auth/logout`.
+- Restricted credentialed CORS to `AUTH_ALLOWED_ORIGINS`, added Origin/Referer checks, disabled request logging, and added expired-session cleanup.
+
+### Why It Changed
+
+Refresh credentials must not be readable by SPA JavaScript or remain reusable after rotation/logout. Server-side session state enables revocation and reuse detection without storing raw credentials.
+
+### Breaking or Non-Breaking
+
+- Non-breaking during rollout while `AUTH_LEGACY_JSON_REFRESH_ENABLED=true`: clients without `X-Auth-Contract: cookie-v1` retain the previous JSON behavior.
+- Cookie-v1 never sends refresh tokens in JSON and never accepts a body token. Disabling the legacy flag is breaking for clients that have not migrated.
+
+### Frontend Actions Required
+
+- Send `X-Auth-Contract: cookie-v1` on login, register and refresh; use `credentials: "include"` for login/register/refresh/logout.
+- Keep only `access_token` client-side. Refresh with an empty-body `POST /auth/refresh`, replace the access token, then retry the failed request once.
+- Treat refresh `401` as signed-out state and call `POST /auth/logout` for explicit logout.
+
+### Migration, Compatibility, Cleanup, and Rollback Notes
+
+- Apply migration `20260807000000_refresh_token_sessions` before deploying code. Configure exact CORS origins and cookie topology.
+- Expired sessions older than `AUTH_SESSION_CLEANUP_RETENTION_SECONDS` are deleted when a new session is issued; the service also exposes `cleanupExpiredSessions()` for a scheduled maintenance runner.
+- Old stateless JWT refresh tokens can be exchanged only while the legacy flag is enabled; successful exchange creates a server-side session. They cannot be retroactively revoked individually.
+- Rollback code while retaining the additive table is safe. New opaque sessions cannot be consumed by old code, so those users must log in again after rollback. Do not drop the table until rollback risk has passed.
+
 ## 2026-06-04 — Backup Center API
 
 ### What Changed

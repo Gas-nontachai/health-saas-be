@@ -6,4 +6,4 @@ export const resetPasswordSchema = z.object({ currentPassword: z.string().min(1)
 export const changeRequiredPasswordSchema = z.object({ currentPassword: z.string().min(1), newPassword: z.string().min(8) });
 export const forgotPasswordRequestSchema = z.object({ email: emailSchema });
 export const forgotPasswordConfirmSchema = z.object({ email: emailSchema, otp: z.string().regex(/^\d{6}$/), newPassword: z.string().min(8) });
-export const refreshTokenSchema = z.object({ refreshToken: z.string().min(1) });
+export const legacyRefreshTokenSchema = z.object({ refreshToken: z.string().min(1) });

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import type { AppConfig } from "../src/config/index.js";
 import type { AppPrisma } from "../src/infra/prisma.js";
-import { createLocalAuthService } from "../src/modules/identity/auth/local.js";
+import { createLocalAuthService, hashRefreshToken } from "../src/modules/identity/auth/local.js";
 import { hashPassword, verifyPassword } from "../src/modules/identity/auth/passwords.js";
 
 const config: AppConfig = {
@@ -12,6 +12,13 @@ const config: AppConfig = {
   JWT_SECRET: "test-jwt-secret-that-is-long-enough-for-local-auth",
   ACCESS_TOKEN_TTL_SECONDS: 900,
   REFRESH_TOKEN_TTL_SECONDS: 2_592_000,
+  AUTH_ALLOWED_ORIGINS: "http://localhost:5173",
+  AUTH_REFRESH_COOKIE_NAME: "refresh_token",
+  AUTH_REFRESH_COOKIE_PATH: "/auth",
+  AUTH_REFRESH_COOKIE_SAME_SITE: "lax",
+  AUTH_REFRESH_COOKIE_SECURE: false,
+  AUTH_LEGACY_JSON_REFRESH_ENABLED: true,
+  AUTH_SESSION_CLEANUP_RETENTION_SECONDS: 604800,
   RESET_OTP_SECRET: "test-reset-otp-secret-that-is-long-enough",
   INITIAL_ADMIN_BOOTSTRAP_ON_START: false,
   RBAC_SYNC_ON_START: false,
@@ -54,6 +61,10 @@ function mockPrisma(user: ReturnType<typeof mockUser>): AppPrisma {
           }
         }
       ])
+    },
+    refreshSession: {
+      create: vi.fn().mockResolvedValue({}),
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 })
     }
   } as unknown as AppPrisma;
 }
@@ -80,10 +91,10 @@ describe("local auth service", () => {
 
     const response = await service.login({ email: "USER@example.com", password: "password123" });
 
-    expect(response.access_token).toEqual(expect.any(String));
-    expect(response.refresh_token).toEqual(expect.any(String));
-    expect(response.requiresPasswordChange).toBe(true);
-    expect(response.user.permissions).toEqual(["auth.read.self"]);
+    expect(response.response.access_token).toEqual(expect.any(String));
+    expect(response.refreshToken).toEqual(expect.any(String));
+    expect(response.response.requiresPasswordChange).toBe(true);
+    expect(response.response.user.permissions).toEqual(["auth.read.self"]);
   });
 
   it("rejects invalid login passwords", async () => {
@@ -125,5 +136,73 @@ describe("local auth service", () => {
         passwordChangeRequired: false
       }
     });
+  });
+
+  it("stores only a SHA-256 refresh token hash", async () => {
+    const user = mockUser({ passwordHash: await hashPassword("password123") });
+    const prisma = mockPrisma(user);
+    const service = createLocalAuthService(config, prisma);
+    const result = await service.login({ email: user.email, password: "password123" });
+
+    expect(prisma.refreshSession.create).toHaveBeenCalledWith({ data: expect.objectContaining({ tokenHash: hashRefreshToken(result.refreshToken) }) });
+    expect(prisma.refreshSession.create).not.toHaveBeenCalledWith({ data: expect.objectContaining({ tokenHash: result.refreshToken }) });
+  });
+
+  it("rotates refresh tokens once and revokes the family on reuse", async () => {
+    const user = mockUser();
+    const sessions: Array<Record<string, any>> = [];
+    const refreshSession = {
+      create: vi.fn(async ({ data }) => {
+        const row = { id: `session-${sessions.length + 1}`, usedAt: null, revokedAt: null, createdAt: new Date(), ...data };
+        sessions.push(row);
+        return row;
+      }),
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+      updateMany: vi.fn(async ({ where, data }) => {
+        const matching = sessions.filter((row) =>
+          (!where.tokenHash || row.tokenHash === where.tokenHash) &&
+          (!where.familyId || row.familyId === where.familyId) &&
+          (where.usedAt !== null || row.usedAt === null) &&
+          (where.revokedAt !== null || row.revokedAt === null) &&
+          (!where.expiresAt?.gt || row.expiresAt > where.expiresAt.gt)
+        );
+        matching.forEach((row) => Object.assign(row, data));
+        return { count: matching.length };
+      }),
+      findUnique: vi.fn(async ({ where }) => sessions.find((row) => row.tokenHash === where.tokenHash) ?? null),
+      findUniqueOrThrow: vi.fn(async ({ where }) => {
+        const row = sessions.find((item) => item.tokenHash === where.tokenHash);
+        if (!row) throw new Error("missing session");
+        return row;
+      })
+    };
+    const prisma = mockPrisma(user) as any;
+    prisma.refreshSession = refreshSession;
+    prisma.$transaction = vi.fn(async (callback: (tx: AppPrisma) => Promise<unknown>) => callback(prisma));
+    const service = createLocalAuthService(config, prisma);
+    const raw = "secure-random-refresh-token";
+    await refreshSession.create({ data: { userId: user.id, familyId: "family-1", tokenHash: hashRefreshToken(raw), expiresAt: new Date(Date.now() + 60_000) } });
+
+    const rotated = await service.refreshToken(raw);
+    expect("refreshToken" in rotated && rotated.refreshToken).not.toBe(raw);
+    expect(sessions).toHaveLength(2);
+
+    const reused = await service.refreshToken(raw);
+    expect(reused).toEqual({ reuseDetected: true });
+    expect(sessions.every((session) => session.revokedAt instanceof Date)).toBe(true);
+  });
+
+  it("rejects expired refresh sessions", async () => {
+    const user = mockUser();
+    const session = { id: "expired", userId: user.id, familyId: "family", tokenHash: hashRefreshToken("expired-token"), expiresAt: new Date(Date.now() - 1000), usedAt: null, revokedAt: null };
+    const prisma = mockPrisma(user) as any;
+    prisma.refreshSession = {
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+      findUnique: vi.fn().mockResolvedValue(session)
+    };
+    prisma.$transaction = vi.fn(async (callback: (tx: AppPrisma) => Promise<unknown>) => callback(prisma));
+    const service = createLocalAuthService(config, prisma);
+
+    await expect(service.refreshToken("expired-token")).rejects.toThrow("Invalid or expired refresh session");
   });
 });
