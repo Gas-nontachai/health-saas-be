@@ -21,10 +21,10 @@ Authorization: Bearer <access_token>
 ### FE Integration Flow (สรุป)
 
 1. FE เรียก `POST /auth/register` หรือ `POST /auth/login`
-2. Backend ตรวจ password hash ใน App DB แล้วส่ง `access_token` + `refresh_token`
-3. FE เก็บ token และยิง API อื่นด้วย `Authorization: Bearer <access_token>`
+2. FE ส่ง `X-Auth-Contract: cookie-v1` และ `credentials: "include"`; Backend ส่ง `access_token` ใน JSON และตั้ง opaque refresh token ใน HttpOnly cookie
+3. FE เก็บ access token ใน memory และยิง API อื่นด้วย `Authorization: Bearer <access_token>`; JavaScript อ่าน refresh token ไม่ได้
 4. Backend verify local JWT → load user roles/permissions → return data
-5. เมื่อ `access_token` หมดอายุ FE เรียก `POST /auth/refresh` ด้วย `refreshToken`
+5. เมื่อ `access_token` หมดอายุ FE เรียก `POST /auth/refresh` ด้วย cookie โดยไม่ส่ง body แล้ว retry request เดิมหนึ่งครั้ง
 6. ถ้า login response มี `requiresPasswordChange=true` FE ต้อง redirect ไปหน้าเปลี่ยนรหัสผ่านทันที
 
 ---
@@ -104,6 +104,8 @@ Runtime ต้องมี `pg_dump` สำหรับ PostgreSQL dump. ถ้�
 
 สมัครสมาชิก — สร้าง user ใน App DB แล้วส่ง local token กลับ (ไม่ต้อง authentication)
 
+**Headers (cookie-v1):** `Content-Type: application/json`, `X-Auth-Contract: cookie-v1`; fetch ต้องใช้ `credentials: "include"`.
+
 **Request Body:**
 
 | Field | Type | Required | Validation |
@@ -130,7 +132,6 @@ Runtime ต้องมี `pg_dump` สำหรับ PostgreSQL dump. ถ้�
 {
   "access_token": "eyJhbGciOi...",
   "expires_in": 900,
-  "refresh_token": "eyJhbGciOi...",
   "token_type": "Bearer",
   "requiresPasswordChange": false,
   "user": {
@@ -145,6 +146,8 @@ Runtime ต้องมี `pg_dump` สำหรับ PostgreSQL dump. ถ้�
 
 **Errors:**
 
+เมื่อส่ง `X-Auth-Contract: cookie-v1` response จะตั้ง refresh cookie และไม่มี `refresh_token` ใน JSON.
+
 | Status | Description |
 |---|---|
 | `400` | Validation error (email format, password too short) |
@@ -155,6 +158,8 @@ Runtime ต้องมี `pg_dump` สำหรับ PostgreSQL dump. ถ้�
 #### `POST /auth/login`
 
 เข้าสู่ระบบ — ตรวจ email/password กับ App DB แล้วรับ local token กลับ (ไม่ต้อง authentication)
+
+**Headers (cookie-v1):** `Content-Type: application/json`, `X-Auth-Contract: cookie-v1`; fetch ต้องใช้ `credentials: "include"`.
 
 **Request Body:**
 
@@ -178,7 +183,6 @@ Runtime ต้องมี `pg_dump` สำหรับ PostgreSQL dump. ถ้�
 {
   "access_token": "eyJhbGciOi...",
   "expires_in": 900,
-  "refresh_token": "eyJhbGciOi...",
   "token_type": "Bearer",
   "requiresPasswordChange": true,
   "user": {
@@ -192,6 +196,8 @@ Runtime ต้องมี `pg_dump` สำหรับ PostgreSQL dump. ถ้�
 ```
 
 ถ้า `requiresPasswordChange=true` FE ต้อง redirect ไปหน้าเปลี่ยนรหัสผ่าน และไม่ควรเรียก dashboard/health/profile/report APIs จนกว่าจะเปลี่ยนสำเร็จ
+
+เมื่อส่ง `X-Auth-Contract: cookie-v1` response จะตั้ง refresh cookie และไม่มี `refresh_token` ใน JSON.
 
 **Errors:**
 
@@ -232,24 +238,14 @@ FE should treat these permissions as UX hints only. Backend guards remain the so
 
 #### `POST /auth/refresh`
 
-ต่ออายุ token ด้วย refresh_token (ไม่ต้อง authentication)
+ต่ออายุ access token ด้วย HttpOnly refresh cookie (ไม่ต้อง Bearer authentication)
 
 > access_token หมดอายุตาม `ACCESS_TOKEN_TTL_SECONDS` (default 900 วินาที), refresh_token หมดอายุตาม `REFRESH_TOKEN_TTL_SECONDS` (default 30 วัน)  
-> FE ควร refresh ก่อน access_token หมดอายุ หรือเมื่อได้ 401
+> `expires_in` มีหน่วยเป็นวินาที. Refresh ทุกครั้ง rotate token แบบ one-time use; การใช้ token เดิมซ้ำ revoke token family ทั้งชุด
 
-**Request Body:**
+**Headers:** `X-Auth-Contract: cookie-v1` และ `Origin: <allowed frontend origin>` (หรือ valid `Referer`)
 
-| Field | Type | Required | Validation |
-|---|---|---|---|
-| `refreshToken` | `string` | ✅ | min 1 character |
-
-**Request Body Example:**
-
-```json
-{
-  "refreshToken": "eyJhbGciOi..."
-}
-```
+**Cookie:** `refresh_token=<opaque token>`. **Request Body:** ไม่มี; body token จะไม่ถูกใช้ใน cookie-v1.
 
 **Response** `200 OK`
 
@@ -257,7 +253,6 @@ FE should treat these permissions as UX hints only. Backend guards remain the so
 {
   "access_token": "eyJhbGciOi...",
   "expires_in": 900,
-  "refresh_token": "eyJhbGciOi...",
   "token_type": "Bearer",
   "requiresPasswordChange": false,
   "user": {
@@ -274,8 +269,26 @@ FE should treat these permissions as UX hints only. Backend guards remain the so
 
 | Status | Description |
 |---|---|
-| `400` | Validation error |
-| `401` | Invalid or expired refresh token |
+| `401` | Cookie หาย, session หมดอายุ/revoked หรือพบ reuse; backend clear cookie |
+| `403` | Origin/Referer หายหรือไม่อยู่ใน allowlist |
+
+---
+
+#### `POST /auth/logout`
+
+Revoke refresh token family และ clear cookie แบบ idempotent. ส่ง allowed `Origin`/`Referer` และ `credentials: "include"`; ไม่มี body.
+
+**Response** `200 OK`: `{ "message": "Logged out" }` แม้ cookie/session ไม่มีหรือหมดอายุแล้ว. Response clear cookie ด้วย `Max-Age=0`.
+
+**Errors:** `403` เมื่อ Origin/Referer ไม่ผ่าน validation.
+
+##### Cookie, CORS, and rollout contract
+
+- Cookie default: name `refresh_token`; `HttpOnly`; `Path=/auth`; `Max-Age=2592000`; host-only หากไม่ตั้ง Domain
+- Production default เป็น `SameSite=None; Secure` สำหรับ Vercel-to-API cross-site deployment; development/test default เป็น `SameSite=Lax; Secure=false`. ทุกค่าสามารถ override ผ่าน advanced cookie env ได้
+- Credentialed CORS ตอบ exact origin เฉพาะ comma-separated `AUTH_ALLOWED_ORIGINS`; รองรับ OPTIONS, `Authorization`, `Content-Type`, `X-Auth-Contract`; ไม่ใช้ wildcard/reflection
+- ช่วง rollout เมื่อ `AUTH_LEGACY_JSON_REFRESH_ENABLED=true`, client เดิมที่ไม่ส่ง header cookie-v1 ยังรับ/ส่ง `refresh_token` ผ่าน JSON ได้
+- หลัง frontend ใหม่เสถียร ให้ตั้ง flag `false`; ทุก request จะใช้ cookie contract และ JSON refresh-token flow ถูกปิด
 
 ---
 

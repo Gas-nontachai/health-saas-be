@@ -1,4 +1,5 @@
 import cors from "@fastify/cors";
+import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyInstance, type preHandlerHookHandler } from "fastify";
@@ -24,6 +25,7 @@ import { syncPermissions as syncPermissionCatalog } from "./modules/identity/rba
 import { registerRecordRoutes } from "./modules/health/blood-sugar/legacy-records.routes.js";
 import { registerErrorHandler } from "./common/errors.js";
 import { registerSharedLinkRoutes } from "./modules/health/shared-links/routes.js";
+import { parseAllowedOrigins } from "./modules/identity/auth/routes.js";
 
 export type BuildAppOptions = {
   config: AppConfig;
@@ -41,16 +43,22 @@ export type BuildAppOptions = {
 };
 
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
-  const app = Fastify({ logger: options.logger ?? options.config.NODE_ENV !== "test" });
+  const app = Fastify({
+    logger: options.logger ?? options.config.NODE_ENV !== "test",
+    disableRequestLogging: true
+  });
 
   registerErrorHandler(app);
 
+  const allowedOrigins = new Set(parseAllowedOrigins(options.config.AUTH_ALLOWED_ORIGINS));
   await app.register(cors, {
-    origin: true,
+    origin: (origin, callback) => callback(null, !origin || allowedOrigins.has(origin)),
     credentials: true,
     methods: ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Authorization", "Content-Type", "X-Auth-Contract"],
     exposedHeaders: ["Content-Disposition"]
   });
+  await app.register(cookie);
   await app.register(helmet, {
     crossOriginResourcePolicy: { policy: "cross-origin" }
   });
@@ -93,7 +101,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     uptime: process.uptime()
   }));
 
-  await registerAuthRoutes(app, localAuth, passwordReset);
+  await registerAuthRoutes(app, options.config, localAuth, passwordReset);
   await registerRecordRoutes(app, options.prisma);
   await registerProfileRoutes(app, options.prisma);
   await registerDashboardRoutes(app, options.prisma);
