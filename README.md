@@ -24,6 +24,8 @@ API จะรันที่ `http://localhost:3000`.
 
 Backend ออก local JWT เองและเก็บ password hash ใน App DB. ตั้ง `JWT_SECRET` ให้เป็น secret อย่างน้อย 32 characters ใน production.
 
+Access token เป็น JWT อายุเริ่มต้น 900 วินาที ส่วน refresh token เป็น opaque random token อายุ 30 วัน เก็บเฉพาะ SHA-256 hash ใน `RefreshSession`. Browser ต้องส่ง `X-Auth-Contract: cookie-v1` และ `credentials: "include"`; backend จะตั้ง HttpOnly cookie และไม่ส่ง refresh token ใน JSON. Production บังคับ `AUTH_REFRESH_COOKIE_SECURE=true`.
+
 Production deploy runs database migration and RBAC sync through `npm run deploy:migrate` before startup; `npm run build` does not connect to the database.
 
 ถ้าจะใช้ `/auth/password/forgot/request` ต้องตั้งค่า mail provider และ `RESET_OTP_SECRET` ใน `.env` ด้วย.
@@ -46,6 +48,10 @@ Optional:
 
 - `ACCESS_TOKEN_TTL_SECONDS`
 - `REFRESH_TOKEN_TTL_SECONDS`
+- `AUTH_ALLOWED_ORIGINS` (comma-separated exact origins; ห้ามใช้ `*`)
+- `AUTH_LEGACY_JSON_REFRESH_ENABLED` (temporary rollout flag)
+
+Advanced cookie overrides (ไม่ต้องตั้งค่าปกติ): `AUTH_REFRESH_COOKIE_NAME`, `AUTH_REFRESH_COOKIE_PATH`, `AUTH_REFRESH_COOKIE_DOMAIN`, `AUTH_REFRESH_COOKIE_SAME_SITE`, `AUTH_REFRESH_COOKIE_SECURE`, `AUTH_SESSION_CLEANUP_RETENTION_SECONDS`. Production default เป็น `SameSite=None; Secure`; development/test default เป็น `SameSite=Lax` และ `Secure=false`.
 - `MAIL_TIMEOUT_MS`
 - `INITIAL_ADMIN_EMAIL`
 - `INITIAL_ADMIN_PASSWORD`
@@ -94,13 +100,15 @@ Auth:
 ```http
 POST /auth/register
 POST /auth/login
+POST /auth/refresh
+POST /auth/logout
 GET  /auth/me
 POST /auth/password/reset
 POST /auth/password/forgot/request
 POST /auth/password/forgot/confirm
 ```
 
-Register/login จะคุยกับ Keycloak โดยตรงเพื่อให้ password ถูกเก็บใน Keycloak เท่านั้น ไม่เก็บใน PostgreSQL.
+Register/login ตรวจ password hash ใน PostgreSQL และสร้าง local auth session; ไม่มี Keycloak runtime.
 
 ตัวอย่าง register:
 
@@ -115,7 +123,17 @@ curl -X POST http://localhost:3000/auth/register \
 ```bash
 curl -X POST http://localhost:3000/auth/login \
   -H "Content-Type: application/json" \
+  -H "X-Auth-Contract: cookie-v1" \
+  -H "Origin: http://localhost:5173" \
+  -c cookies.txt \
   -d '{"email":"user@example.com","password":"password123"}'
+```
+
+Refresh/logout ใช้ cookie โดยไม่มี refresh token ใน body:
+
+```bash
+curl -X POST http://localhost:3000/auth/refresh -H "X-Auth-Contract: cookie-v1" -H "Origin: http://localhost:5173" -b cookies.txt -c cookies.txt
+curl -X POST http://localhost:3000/auth/logout -H "Origin: http://localhost:5173" -b cookies.txt
 ```
 
 ตัวอย่าง reset password เมื่อยังจำรหัสเดิมได้:
@@ -154,6 +172,8 @@ Routes:
 - `GET /health`
 - `POST /auth/register`
 - `POST /auth/login`
+- `POST /auth/refresh`
+- `POST /auth/logout`
 - `GET /auth/me`
 - `POST /auth/password/reset`
 - `POST /auth/password/forgot/request`

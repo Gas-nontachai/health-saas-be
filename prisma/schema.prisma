@@ -26,9 +26,26 @@ model User {
   sharedLinks         SharedLink[]
   backupLogs          BackupLog[]
   roles               UserRole[]
+  refreshSessions     RefreshSession[]
   createdAt           DateTime            @default(now())
 
   @@index([email])
+}
+
+model RefreshSession {
+  id         String    @id @default(uuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  familyId   String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  usedAt     DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([familyId])
+  @@index([expiresAt])
+  @@index([userId])
 }
 
 model Role {
