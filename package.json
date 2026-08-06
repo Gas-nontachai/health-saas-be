@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && node scripts/migrate-on-render-build.mjs",
+    "build": "prisma generate && rm -rf dist && tsc -p tsconfig.build.json && node scripts/migrate-on-render-build.mjs",
     "start": "npm run deploy:migrate && node dist/src/server.js",
     "deploy:migrate": "node scripts/deploy-migrate.mjs",
     "db:copy": "node scripts/copy-postgres-data.mjs",
